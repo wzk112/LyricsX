@@ -106,7 +106,7 @@ struct LyricsScrollView: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             if let doc = model.session.document {
-                if doc.isInstrumental {
+                if doc.isLikelyInstrumentalPlaceholder {
                     trackTitlePlaceholder
                 } else if doc.isSynced {
                     syncedLyrics(doc)

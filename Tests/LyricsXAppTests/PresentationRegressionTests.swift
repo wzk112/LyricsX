@@ -79,7 +79,7 @@ private let overlayLyrics = LyricsDocument(title: "Overlay Song", artist: "Artis
         #expect(!overlay.panel.isVisible && !overlay.controlPanel.isVisible)
     }
 
-    @Test func overlayOnlyAppearsForTimedNonInstrumentalLyrics() async throws {
+    @Test func overlayShowsSongTitleWhenLyricsAreUnavailable() async throws {
         _ = NSApplication.shared
         let suite = "LyricsXTests-" + UUID().uuidString
         let defaults = try #require(UserDefaults(suiteName: suite))
@@ -100,12 +100,12 @@ private let overlayLyrics = LyricsDocument(title: "Overlay Song", artist: "Artis
         model.session.use(.init(title: "Overlay Song",
             lines: [.init(id: 0, time: 0, text: "Instrumental")], isInstrumental: true), persist: false)
         try await Task.sleep(for: .milliseconds(25))
-        #expect(!overlay.panel.isVisible)
+        #expect(overlay.panel.isVisible)
 
         model.session.use(.init(title: "Overlay Song",
             lines: [.init(id: 0, time: 0, text: "   ")]), persist: false)
         try await Task.sleep(for: .milliseconds(25))
-        #expect(!overlay.panel.isVisible)
+        #expect(overlay.panel.isVisible)
     }
 
     @Test func overlayPositionSurvivesControllerRecreation() throws {
@@ -166,6 +166,20 @@ private let overlayLyrics = LyricsDocument(title: "Overlay Song", artist: "Artis
         #expect(model.artwork == nil)
         #expect(model.session.track?.title == "B")
         model.stop()
+    }
+
+    @Test func transientPlayerReadErrorsNeverFlashInTheInterface() async throws {
+        let model = AppModel(repository: EmptyRepository(), playerErrorDelay: .milliseconds(30))
+        defer { model.stop() }
+        model.bridge.onError?("未识别到播放源")
+        try await Task.sleep(for: .milliseconds(10))
+        model.bridge.onError?(nil)
+        try await Task.sleep(for: .milliseconds(35))
+        #expect(model.playerError == nil)
+
+        model.bridge.onError?("未识别到播放源")
+        try await Task.sleep(for: .milliseconds(35))
+        #expect(model.playerError == "未识别到播放源")
     }
 
     @Test func previewDataCannotReplaceTheProductionSession() {

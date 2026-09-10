@@ -13,6 +13,11 @@ private func version(_ source: String, translation: String? = nil) -> LyricsDocu
     #expect(SourceConfiguration.normalizedOrder(["QQMusic", "Unknown", "QQMusic", "NetEase"]) == ["QQMusic", "NetEase", "LRCLIB", "Kugou", "Musixmatch"])
 }
 
+@Test func automaticSearchUsesADeeperBoundedCandidateSet() {
+    #expect(LyricsStore.automaticCandidateLimit == 10)
+    #expect(LyricsStore.automaticCandidateLimit >= LyricsStore.manualCandidateLimit)
+}
+
 @Test func sourcePriorityAndBilingualPreferenceChangeTheWinner() {
     var config = SourceConfiguration()
     let plain = version("LRCLIB")

@@ -79,6 +79,11 @@ public struct SourceConfiguration: Sendable {
 }
 
 public final class LyricsStore: LyricsRepository, Sendable {
+    /// Automatic search inspects the top ten candidates from each enabled
+    /// source before choosing. This reaches the versions manual search often
+    /// exposes without unbounded provider requests.
+    static let automaticCandidateLimit = 10
+    static let manualCandidateLimit = 10
     public let cache: LyricsCache
     private let configuration: @Sendable () -> SourceConfiguration
     public init(cache: LyricsCache = LyricsCache(), configuration: @escaping @Sendable () -> SourceConfiguration = { .init() }) {
@@ -103,14 +108,13 @@ public final class LyricsStore: LyricsRepository, Sendable {
                 do {
                     let results = search(track: track)
                     let config = configuration()
-                    var hasStrictCandidate = false
+                    var strictCandidates: [LyricCandidate] = []
                     var fallback: LyricCandidate?
                     var relaxed: LyricCandidate?
                     for try await candidate in results {
                         try Task.checkCancellation()
                         if candidate.score >= 60 {
-                            hasStrictCandidate = true
-                            continuation.yield(candidate)
+                            strictCandidates.append(candidate)
                         } else if let score = config.fallbackSelectionScore(candidate.document, for: track),
                                   fallback == nil || score > fallback!.score {
                             fallback = LyricCandidate(document: candidate.document, score: score)
@@ -119,8 +123,14 @@ public final class LyricsStore: LyricsRepository, Sendable {
                             relaxed = LyricCandidate(document: candidate.document, score: score)
                         }
                     }
-                    if !hasStrictCandidate, let fallback { continuation.yield(fallback) }
-                    else if !hasStrictCandidate, let relaxed { continuation.yield(relaxed) }
+                    // Do not let the first provider response become visible and
+                    // get cached before the deeper concurrent search completes.
+                    // The session receives the best candidate first, then keeps
+                    // the remaining versions for manual inspection.
+                    if !strictCandidates.isEmpty {
+                        for candidate in strictCandidates.sorted(by: { $0.score > $1.score }) { continuation.yield(candidate) }
+                    } else if let fallback { continuation.yield(fallback) }
+                    else if let relaxed { continuation.yield(relaxed) }
                     continuation.finish()
                 } catch { continuation.finish(throwing: error) }
             }
@@ -142,7 +152,8 @@ public final class LyricsStore: LyricsRepository, Sendable {
                 if let token = config.musixmatchToken, !token.isEmpty, config.enabled.contains("Musixmatch") {
                     providers.append(LyricsProviders.Service.musixmatch.create(.init(usertoken: token), httpClient: client))
                 }
-                let request = LyricsSearchRequest(searchTerm: keyword.map { .keyword($0) } ?? .info(title: track.title, artist: track.artist), duration: track.duration, limit: 5)
+                let limit = keyword == nil ? Self.automaticCandidateLimit : Self.manualCandidateLimit
+                let request = LyricsSearchRequest(searchTerm: keyword.map { .keyword($0) } ?? .info(title: track.title, artist: track.artist), duration: track.duration, limit: limit)
                 let failures = await withTaskGroup(of: String?.self, returning: [String].self) { group in
                     for provider in providers {
                         group.addTask {

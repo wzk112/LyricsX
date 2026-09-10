@@ -113,7 +113,8 @@ private struct MenuBarContent: View {
 private struct MenuBarLyricLabel: View {
     let model: AppModel
     var body: some View {
-        if let doc = model.session.document, let index = model.session.currentLineIndex, doc.lines.indices.contains(index) {
+        if let doc = model.session.document, !doc.isLikelyInstrumentalPlaceholder,
+           let index = model.session.currentLineIndex, doc.lines.indices.contains(index) {
             Text(String(model.preferences.text(doc.lines[index].text).prefix(36)))
                 .help(model.preferences.text(doc.lines[index].text))
         } else { Text(model.session.track?.title ?? "LyricsX") }

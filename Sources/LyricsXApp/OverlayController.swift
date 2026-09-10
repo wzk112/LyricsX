@@ -159,7 +159,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         if model.session.isPlaying && !wasPlaying { explicitShowWhilePaused = false }
         wasPlaying = model.session.isPlaying
         let autoHidden = prefs.hideWhenPaused && !model.session.isPlaying && !explicitShowWhilePaused
-        let visible = prefs.overlayVisible && !autoHidden && hasDisplayableLyrics
+        let visible = prefs.overlayVisible && !autoHidden && model.session.track != nil
         if visible != lastVisible {
             lastVisible = visible
             if visible { panel.orderFrontRegardless() } else { panel.orderOut(nil) }
@@ -286,10 +286,6 @@ final class OverlayController: NSObject, NSWindowDelegate {
         if let key = positionDefaultsKey { UserDefaults.standard.set(NSStringFromPoint(panel.frame.origin), forKey: key) }
     }
 
-    private var hasDisplayableLyrics: Bool {
-        guard let document = model.session.document, document.isSynced, !document.isInstrumental else { return false }
-        return document.lines.contains { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-    }
 }
 
 struct OverlayView: View {
@@ -311,42 +307,54 @@ struct OverlayView: View {
     private var lyricIdentity: String {
         "\(model.session.track?.id ?? "idle")-\(model.session.document?.id.description ?? placeholder)-\(line?.id ?? -1)"
     }
+    private var showsTitleOnly: Bool {
+        guard let document = model.session.document else { return model.session.track != nil }
+        guard document.isSynced, !document.isLikelyInstrumentalPlaceholder else { return true }
+        return !document.lines.contains { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 6) {
-                Text(model.session.track?.title ?? "LyricsX").lineLimit(1)
-                if let artist = model.session.track?.artist, !artist.isEmpty { Text("· " + artist).lineLimit(1).opacity(0.85) }
+            if showsTitleOnly {
+                Text(model.session.track?.title ?? "LyricsX")
+                    .font(.system(size: model.preferences.fontSize, weight: .semibold))
+                    .multilineTextAlignment(.center).lineLimit(2).minimumScaleFactor(0.6)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                HStack(spacing: 6) {
+                    Text(model.session.track?.title ?? "LyricsX").lineLimit(1)
+                    if let artist = model.session.track?.artist, !artist.isEmpty { Text("· " + artist).lineLimit(1).opacity(0.85) }
+                    Spacer(minLength: 4)
+                    Color.clear.frame(width: 126, height: 30)
+                }.font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.92)).frame(height: 30)
                 Spacer(minLength: 4)
-                Color.clear.frame(width: 126, height: 30)
-            }.font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.92)).frame(height: 30)
-            Spacer(minLength: 4)
-            ZStack {
-              VStack(spacing: 0) {
-                if let line, let doc = model.session.document {
-                    LiveLyricText(session: model.session, line: line, document: doc, active: true,
-                        text: line.text.isEmpty ? "•••" : model.preferences.text(line.text))
-                        .font(.system(size: model.preferences.fontSize, weight: .semibold)).tracking(-0.4)
-                        .multilineTextAlignment(.center).lineLimit(2).minimumScaleFactor(0.6)
-                } else { Text(placeholder) }
-            if ["translation", "both"].contains(model.preferences.overlaySecondaryMode), let translation {
-                Text(translation).font(.system(size: model.preferences.translationFontSize, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.95)).lineLimit(1).minimumScaleFactor(0.75)
-                    .shadow(color: .black.opacity(0.9), radius: 2, y: 1).padding(.top, model.preferences.overlayPrimarySpacing)
+                ZStack {
+                  VStack(spacing: 0) {
+                    if let line, let doc = model.session.document {
+                        LiveLyricText(session: model.session, line: line, document: doc, active: true,
+                            text: line.text.isEmpty ? "•••" : model.preferences.text(line.text))
+                            .font(.system(size: model.preferences.fontSize, weight: .semibold)).tracking(-0.4)
+                            .multilineTextAlignment(.center).lineLimit(2).minimumScaleFactor(0.6)
+                    } else { Text(placeholder) }
+                if ["translation", "both"].contains(model.preferences.overlaySecondaryMode), let translation {
+                    Text(translation).font(.system(size: model.preferences.translationFontSize, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.95)).lineLimit(1).minimumScaleFactor(0.75)
+                        .shadow(color: .black.opacity(0.9), radius: 2, y: 1).padding(.top, model.preferences.overlayPrimarySpacing)
+                }
+                if ["next", "both"].contains(model.preferences.overlaySecondaryMode), let nextLine {
+                    Text(nextLine).font(.system(size: model.preferences.nextLineFontSize, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.85)).lineLimit(1).minimumScaleFactor(0.75)
+                        .shadow(color: .black.opacity(0.9), radius: 2, y: 1)
+                        .padding(.top, model.preferences.overlaySecondaryMode == "both" && translation != nil ? model.preferences.overlaySecondarySpacing : model.preferences.overlayPrimarySpacing)
+                }
+                  }.frame(maxWidth: .infinity)
+                    .id(lyricIdentity)
+                    .transition(reduceMotion || model.preferences.reduceMotion ? .opacity : .lyricDissolve)
+                }.font(.system(size: model.preferences.fontSize, weight: .semibold))
+                    .shadow(color: .black.opacity(0.8), radius: 1.5, y: 1)
+                    .shadow(color: .black.opacity(0.35), radius: 5, y: 1)
+                    .animation(reduceMotion || model.preferences.reduceMotion ? nil : .smooth(duration: 0.48), value: lyricIdentity)
+                Spacer(minLength: 8)
             }
-            if ["next", "both"].contains(model.preferences.overlaySecondaryMode), let nextLine {
-                Text(nextLine).font(.system(size: model.preferences.nextLineFontSize, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.85)).lineLimit(1).minimumScaleFactor(0.75)
-                    .shadow(color: .black.opacity(0.9), radius: 2, y: 1)
-                    .padding(.top, model.preferences.overlaySecondaryMode == "both" && translation != nil ? model.preferences.overlaySecondarySpacing : model.preferences.overlayPrimarySpacing)
-            }
-              }.frame(maxWidth: .infinity)
-                .id(lyricIdentity)
-                .transition(reduceMotion || model.preferences.reduceMotion ? .opacity : .lyricDissolve)
-            }.font(.system(size: model.preferences.fontSize, weight: .semibold))
-                .shadow(color: .black.opacity(0.8), radius: 1.5, y: 1)
-                .shadow(color: .black.opacity(0.35), radius: 5, y: 1)
-                .animation(reduceMotion || model.preferences.reduceMotion ? nil : .smooth(duration: 0.48), value: lyricIdentity)
-            Spacer(minLength: 8)
         }.padding(.horizontal, 24).padding(.vertical, 12)
             .foregroundStyle(.white)
             .background(reduceTransparency ? Color(white: 0.12) : .black.opacity(model.preferences.overlayBackgroundStrength), in: .rect(cornerRadius: 24))

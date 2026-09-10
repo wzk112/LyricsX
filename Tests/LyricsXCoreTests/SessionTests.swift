@@ -21,6 +21,25 @@ private final class ControlledRepository: LyricsRepository, @unchecked Sendable 
 }
 
 @Suite @MainActor struct SessionTests {
+    @Test func shortInstrumentalPlaceholderPhrasesAreDetectedWithoutHidingRealLyrics() {
+        let chinese = LyricsDocument(lines: [.init(id: 0, time: 0, text: "♪ 纯音乐，请欣赏 ♪")])
+        let english = LyricsDocument(lines: [.init(id: 0, time: 0, text: "No lyrics available")])
+        let japanese = LyricsDocument(lines: [.init(id: 0, time: 0, text: "インストゥルメンタル")])
+        let symbols = LyricsDocument(lines: [.init(id: 0, time: 0, text: "♫ ♪ ♬")])
+        let realShortSong = LyricsDocument(lines: [
+            .init(id: 0, time: 0, text: "Please enjoy the sunshine"),
+            .init(id: 1, time: 2, text: "We will sing again"),
+            .init(id: 2, time: 4, text: "Tonight")
+        ])
+        let longerSong = LyricsDocument(lines: (0..<4).map { .init(id: $0, time: Double($0), text: "纯音乐") })
+        #expect(chinese.isLikelyInstrumentalPlaceholder)
+        #expect(english.isLikelyInstrumentalPlaceholder)
+        #expect(japanese.isLikelyInstrumentalPlaceholder)
+        #expect(symbols.isLikelyInstrumentalPlaceholder)
+        #expect(!realShortSong.isLikelyInstrumentalPlaceholder)
+        #expect(!longerSong.isLikelyInstrumentalPlaceholder)
+    }
+
     @Test func acceptedResultIsSavedEvenIfTheSearchLaterFails() async {
         let repo = ControlledRepository(); let session = LyricsSession(repository: repo)
         session.accept(snapshot(first))
