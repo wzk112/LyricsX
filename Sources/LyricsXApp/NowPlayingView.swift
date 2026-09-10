@@ -107,7 +107,7 @@ struct LyricsScrollView: View {
         ZStack(alignment: .bottom) {
             if let doc = model.session.document {
                 if doc.isInstrumental {
-                    emptyState(symbol: "pianokeys", title: "纯音乐，尽情聆听", detail: "这一首，让旋律说话。")
+                    trackTitlePlaceholder
                 } else if doc.isSynced {
                     syncedLyrics(doc)
                 } else {
@@ -124,16 +124,7 @@ struct LyricsScrollView: View {
                     }
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                VStack(spacing: 18) {
-                    if model.session.phase == .loading { ProgressView().controlSize(.small).tint(.white) }
-                    Image(systemName: model.session.phase == .loading ? "text.magnifyingglass" : "text.quote").font(.system(size: 34, weight: .light)).foregroundStyle(.white.opacity(0.4))
-                    Text(model.lyricsBlocked ? "已停用这首歌曲的歌词搜索" : statusTitle).font(.title3.weight(.medium))
-                    if model.lyricsBlocked { Button("恢复搜索") { model.restoreLyricsSearch() }.buttonStyle(.glass) }
-                    if case .failed(let error) = model.session.phase { Text(error).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center) }
-                    if model.session.phase != .loading {
-                        HStack { Button("重新搜索") { model.refreshLyrics() }; Button("导入歌词") { model.importLyrics() } }.buttonStyle(.glass)
-                    }
-                }.padding(40).frame(maxWidth: .infinity, maxHeight: .infinity)
+                trackTitlePlaceholder
             }
             if browsing {
                 Button { browsing = false } label: { Label("回到当前歌词", systemImage: "location.fill") }
@@ -141,7 +132,16 @@ struct LyricsScrollView: View {
             }
         }
     }
-    private var statusTitle: String { model.session.phase == .loading ? "正在寻找这一首的歌词…" : "还没有找到合适的歌词" }
+    private var trackTitlePlaceholder: some View {
+        Text(model.session.track?.title ?? "LyricsX")
+            .font(.system(size: 34, weight: .semibold))
+            .foregroundStyle(.white.opacity(0.9))
+            .lineLimit(2)
+            .multilineTextAlignment(.center)
+            .padding(40)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .accessibilityLabel("当前歌曲：\(model.session.track?.title ?? "LyricsX")")
+    }
     private func emptyState(symbol: String, title: String, detail: String) -> some View {
         VStack(spacing: 18) {
             Image(systemName: symbol).font(.system(size: 42, weight: .ultraLight)).foregroundStyle(.white.opacity(0.4))

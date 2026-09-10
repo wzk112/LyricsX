@@ -20,7 +20,7 @@
 
 ## 安装
 
-从 [Releases](https://github.com/wzk112/LyricsX/releases) 下载最新的 `LyricsX-2.0.2.zip`，解压后将 `LyricsX.app` 拖到 `/Applications`。
+从 [Releases](https://github.com/wzk112/LyricsX/releases) 下载最新的 `LyricsX-2.0.3.zip`，解压后将 `LyricsX.app` 拖到 `/Applications`。
 
 本次包使用本机 ad-hoc 签名，没有 Developer ID 公证票据。首次打开时如果 macOS 提示无法验证开发者：
 
@@ -32,7 +32,7 @@
    xattr -dr com.apple.quarantine /Applications/LyricsX.app
    ```
 
-完整的安装、签名和版本说明见 [`docs/releases/v2.0.2.md`](docs/releases/v2.0.2.md)。
+完整的安装、签名和版本说明见 [`docs/releases/v2.0.3.md`](docs/releases/v2.0.3.md)。
 
 ## 播放器权限
 
