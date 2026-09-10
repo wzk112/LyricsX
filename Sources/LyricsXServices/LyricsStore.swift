@@ -25,7 +25,7 @@ public struct SourceConfiguration: Sendable {
         let match = CandidateRanker.score(document, for: track)
         // Preferences cannot promote a rejected title, artist, or duration match.
         guard match >= 60 else { return match }
-        let exactTitle = CandidateRanker.normalized(document.title) == CandidateRanker.normalized(track.title)
+        let exactTitle = CandidateRanker.equivalentTitle(document.title, track.title)
         let order = Self.normalizedOrder(sourceOrder)
         let sourceBonus = order.firstIndex(of: document.source).map { Double(order.count - $0) * 10 } ?? 0
         // Lexicographic priorities: title match > timing > bilingual > source >
@@ -50,7 +50,7 @@ public struct SourceConfiguration: Sendable {
         else { return nil }
         let order = Self.normalizedOrder(sourceOrder)
         let sourceBonus = order.firstIndex(of: document.source).map { Double(order.count - $0) } ?? 0
-        return 50 + sourceBonus
+        return 50 + preferenceBonus(document) + sourceBonus / 100
     }
 
     /// A deliberately lower-priority fallback for sources with incomplete
@@ -61,20 +61,29 @@ public struct SourceConfiguration: Sendable {
         let title = CandidateRanker.normalized(track.title)
         let candidateTitle = CandidateRanker.normalized(document.title)
         guard title.count >= 3, candidateTitle.count >= 3 else { return nil }
-        let exactTitle = title == candidateTitle
+        let exactTitle = CandidateRanker.equivalentTitle(document.title, track.title)
         let compatibleTitle = exactTitle || title.contains(candidateTitle) || candidateTitle.contains(title)
         guard compatibleTitle else { return nil }
 
-        let artist = CandidateRanker.normalized(track.artist)
-        let candidateArtist = CandidateRanker.normalized(document.artist)
-        let compatibleArtist = artist.isEmpty || (!candidateArtist.isEmpty &&
-            (artist == candidateArtist || artist.contains(candidateArtist) || candidateArtist.contains(artist)))
+        let compatibleArtist = CandidateRanker.compatibleArtists(document.artist, for: track)
         // A partial title must retain an artist match; an exact title is useful
         // even when a provider has omitted the artist or reports a variant.
         guard exactTitle || compatibleArtist else { return nil }
         let order = Self.normalizedOrder(sourceOrder)
         let sourceBonus = order.firstIndex(of: document.source).map { Double(order.count - $0) } ?? 0
-        return (exactTitle ? 42 : 34) + (compatibleArtist ? 3 : 0) + sourceBonus
+        return (exactTitle ? 40 : 30) + preferenceBonus(document) + (compatibleArtist ? 0.1 : 0) + sourceBonus / 100
+    }
+
+    private func preferenceBonus(_ document: LyricsDocument) -> Double {
+        (preferWordTiming && document.hasWordTiming ? 4 : 0) + (preferBilingual && document.hasTranslation ? 2 : 0)
+    }
+
+    func bestScore(_ document: LyricsDocument, for track: Track, aliases: [Track] = []) -> Double {
+        ([track] + aliases).map { query in
+            let strict = selectionScore(document, for: query)
+            if strict >= 60 { return strict }
+            return max(fallbackSelectionScore(document, for: query) ?? 0, relaxedSelectionScore(document, for: query) ?? 0)
+        }.max() ?? 0
     }
 }
 
@@ -86,8 +95,18 @@ public final class LyricsStore: LyricsRepository, Sendable {
     static let manualCandidateLimit = 10
     public let cache: LyricsCache
     private let configuration: @Sendable () -> SourceConfiguration
+    private let aliasResolver: TrackAliasResolver
+    typealias SearchBackend = @Sendable (Track, String?, SourceConfiguration, SecureLyricsHTTPClient) -> AsyncThrowingStream<LyricsDocument, Error>
+    private let searchBackend: SearchBackend
+    private let searchBudget: Duration
     public init(cache: LyricsCache = LyricsCache(), configuration: @escaping @Sendable () -> SourceConfiguration = { .init() }) {
         self.cache = cache; self.configuration = configuration
+        self.aliasResolver = TrackAliasResolver(); self.searchBackend = Self.providerSearch; self.searchBudget = .seconds(12)
+    }
+    init(cache: LyricsCache, configuration: @escaping @Sendable () -> SourceConfiguration = { .init() },
+         aliasResolver: TrackAliasResolver, searchBudget: Duration = .seconds(12), searchBackend: @escaping SearchBackend) {
+        self.cache = cache; self.configuration = configuration; self.aliasResolver = aliasResolver
+        self.searchBackend = searchBackend; self.searchBudget = searchBudget
     }
     public func save(_ document: LyricsDocument, for track: Track) async throws { if track.playerID != "lyricsx.demo" { try await cache.save(document, for: track) } }
     public func lyrics(for track: Track, forceRefresh: Bool) -> AsyncThrowingStream<LyricCandidate, Error> {
@@ -105,34 +124,28 @@ public final class LyricsStore: LyricsRepository, Sendable {
                         continuation.yield(LyricCandidate(document: local, score: 999)); continuation.finish(); return
                     }
                 }
+                var candidates: [LyricCandidate] = []
+                var failure: Error?
                 do {
                     let results = search(track: track)
-                    let config = configuration()
-                    var strictCandidates: [LyricCandidate] = []
-                    var fallback: LyricCandidate?
-                    var relaxed: LyricCandidate?
                     for try await candidate in results {
                         try Task.checkCancellation()
-                        if candidate.score >= 60 {
-                            strictCandidates.append(candidate)
-                        } else if let score = config.fallbackSelectionScore(candidate.document, for: track),
-                                  fallback == nil || score > fallback!.score {
-                            fallback = LyricCandidate(document: candidate.document, score: score)
-                        } else if let score = config.relaxedSelectionScore(candidate.document, for: track),
-                                  relaxed == nil || score > relaxed!.score {
-                            relaxed = LyricCandidate(document: candidate.document, score: score)
+                        if candidate.score > 0 {
+                            candidates.removeAll { $0.id == candidate.id }
+                            candidates.append(candidate)
                         }
                     }
                     // Do not let the first provider response become visible and
                     // get cached before the deeper concurrent search completes.
                     // The session receives the best candidate first, then keeps
                     // the remaining versions for manual inspection.
-                    if !strictCandidates.isEmpty {
-                        for candidate in strictCandidates.sorted(by: { $0.score > $1.score }) { continuation.yield(candidate) }
-                    } else if let fallback { continuation.yield(fallback) }
-                    else if let relaxed { continuation.yield(relaxed) }
-                    continuation.finish()
-                } catch { continuation.finish(throwing: error) }
+                } catch { failure = error }
+                guard !Task.isCancelled else { continuation.finish(); return }
+                // A slow or failing source must not throw away another source's
+                // usable results collected before the shared search deadline.
+                for candidate in candidates.sorted(by: { $0.score > $1.score }) { continuation.yield(candidate) }
+                if candidates.isEmpty, let failure { continuation.finish(throwing: failure) }
+                else { continuation.finish() }
             }
             continuation.onTermination = { _ in task.cancel() }
         }
@@ -147,6 +160,65 @@ public final class LyricsStore: LyricsRepository, Sendable {
                 let session = URLSession(configuration: sessionConfig)
                 defer { session.invalidateAndCancel() }
                 let client = SecureLyricsHTTPClient(session: session)
+                let deadline = Task {
+                    do { try await Task.sleep(for: searchBudget) } catch { return }
+                    continuation.finish(throwing: StoreError.timeout)
+                    session.invalidateAndCancel()
+                }
+                defer { deadline.cancel() }
+                let collector = SearchCollector(track: track, configuration: config, continuation: continuation)
+                await withTaskGroup(of: Void.self) { group in
+                    for query in Self.queryKeywords(track: track, keyword: keyword) {
+                        group.addTask { await self.collect(track: track, keyword: query, client: client, config: config, collector: collector) }
+                    }
+                    if keyword == nil {
+                        group.addTask {
+                            let aliases = await self.aliasResolver.aliases(for: track, client: client)
+                            guard !Task.isCancelled else { return }
+                            await collector.addAliases(aliases)
+                            await withTaskGroup(of: Void.self) { aliasGroup in
+                                for alias in aliases {
+                                    for query in Self.queryKeywords(track: alias, keyword: nil) {
+                                        aliasGroup.addTask { await self.collect(track: alias, keyword: query, client: client, config: config, collector: collector) }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if await collector.allFailed { continuation.finish(throwing: StoreError.unavailable) }
+                else { continuation.finish() }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    /// Manual and automatic search share the keyword path. Title-only queries
+    /// recover songs where a provider cannot match a localized artist spelling.
+    static func queryKeywords(track: Track, keyword: String?) -> [String?] {
+        if let keyword { return [keyword] }
+        return [nil] + TrackSearchText.titles(track.title).map { Optional($0) }
+    }
+
+    private func collect(track: Track, keyword: String?, client: SecureLyricsHTTPClient,
+                         config: SourceConfiguration, collector: SearchCollector) async {
+        do {
+            for try await document in searchBackend(track, keyword, config, client) {
+                guard !Task.isCancelled else { return }
+                let discovered = await collector.add(document)
+                for alias in discovered {
+                    guard !Task.isCancelled else { return }
+                    await collect(track: alias, keyword: nil, client: client, config: config, collector: collector)
+                }
+            }
+            await collector.completed(failed: false)
+        } catch { await collector.completed(failed: true) }
+    }
+
+    private static func providerSearch(track: Track, keyword: String?, config: SourceConfiguration,
+                                       client: SecureLyricsHTTPClient) -> AsyncThrowingStream<LyricsDocument, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
                 let services: [LyricsProviders.Service<LyricsProviders.EmptyOptions>] = [.lrclib, .netease, .qq, .kugou]
                 var providers: [any LyricsProvider] = services.filter { config.enabled.contains($0.displayName) }.map { $0.create(httpClient: client) }
                 if let token = config.musixmatchToken, !token.isEmpty, config.enabled.contains("Musixmatch") {
@@ -161,7 +233,7 @@ public final class LyricsStore: LyricsRepository, Sendable {
                                 for try await lyrics in provider.lyrics(for: request) {
                                     try Task.checkCancellation()
                                     let doc = LyricsCodec.convert(lyrics)
-                                    continuation.yield(LyricCandidate(document: doc, score: config.selectionScore(doc, for: track)))
+                                    continuation.yield(doc)
                                 }
                                 return nil
                             } catch is CancellationError { return nil }
@@ -173,7 +245,7 @@ public final class LyricsStore: LyricsRepository, Sendable {
                         group.addTask {
                             do {
                                 if let doc = try await Self.fetchPlainLRCLIB(track: track, client: client) {
-                                    continuation.yield(LyricCandidate(document: doc, score: config.selectionScore(doc, for: track)))
+                                    continuation.yield(doc)
                                 }
                             } catch { /* Other LRCLIB search results remain usable. */ }
                             return nil
@@ -215,7 +287,15 @@ public final class LyricsStore: LyricsRepository, Sendable {
         return LyricsDocument(title: item.trackName, artist: item.artistName, album: item.albumName, source: "LRCLIB", duration: item.duration,
                               plainText: item.plainLyrics, isInstrumental: item.instrumental)
     }
-    enum StoreError: LocalizedError { case unavailable; var errorDescription: String? { "暂时无法连接歌词源，请检查网络后重试。" } }
+    enum StoreError: LocalizedError {
+        case unavailable, timeout
+        var errorDescription: String? {
+            switch self {
+            case .unavailable: "暂时无法连接歌词源，请检查网络后重试。"
+            case .timeout: "部分歌词源响应超时，已保留可用结果；可以重新搜索。"
+            }
+        }
+    }
 }
 
 struct SecureLyricsHTTPClient: HTTPClient {
@@ -239,7 +319,9 @@ struct SecureLyricsHTTPClient: HTTPClient {
         // macOS 27.0 can abort the process from URLSession.data(for:) while QQ
         // Music performs its optional cover request. The data-task API keeps the
         // same timeout and cancellation behavior without that async bridge.
-        return try await withCheckedThrowingContinuation { continuation in
+        let cancellation = HTTPTaskCancellation()
+        return try await withTaskCancellationHandler {
+          try await withCheckedThrowingContinuation { continuation in
             let task = session.dataTask(with: request) { data, response, error in
                 if let error { continuation.resume(throwing: error); return }
                 guard let data, data.count < 8_000_000, let response = response as? HTTPURLResponse else {
@@ -247,7 +329,71 @@ struct SecureLyricsHTTPClient: HTTPClient {
                 }
                 continuation.resume(returning: (data, response))
             }
+            cancellation.install(task)
             task.resume()
+          }
+        } onCancel: {
+            cancellation.cancel()
         }
     }
+}
+
+private final class HTTPTaskCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var task: URLSessionDataTask?
+    private var cancelled = false
+    func install(_ value: URLSessionDataTask) {
+        lock.withLock { task = value; if cancelled { value.cancel() } }
+    }
+    func cancel() { lock.withLock { cancelled = true; task?.cancel() } }
+}
+
+private actor SearchCollector {
+    struct Key: Hashable {
+        var title: String; var artist: String; var source: String
+        var lines: [LyricLine]; var plain: String?; var instrumental: Bool
+        init(_ document: LyricsDocument) {
+            title = document.title; artist = document.artist; source = document.source
+            lines = document.lines; plain = document.plainText; instrumental = document.isInstrumental
+        }
+    }
+    let track: Track
+    let configuration: SourceConfiguration
+    let continuation: AsyncThrowingStream<LyricCandidate, Error>.Continuation
+    var aliases: [Track] = []
+    var candidates: [Key: LyricCandidate] = [:]
+    var successes = 0
+    var failures = 0
+    var allFailed: Bool { candidates.isEmpty && successes == 0 && failures > 0 }
+    init(track: Track, configuration: SourceConfiguration, continuation: AsyncThrowingStream<LyricCandidate, Error>.Continuation) {
+        self.track = track; self.configuration = configuration; self.continuation = continuation
+    }
+    func add(_ document: LyricsDocument) -> [Track] {
+        guard document.isSynced || document.isInstrumental || document.plainText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else { return [] }
+        var discovered = addAliases(ArtistAliasEvidence.aliases(in: document, for: track))
+        discovered += addAliases(ArtistAliasEvidence.searchTitles(in: document, for: track, aliases: aliases))
+        let key = Key(document)
+        guard candidates[key] == nil else { return discovered }
+        let candidate = LyricCandidate(document: document, score: configuration.bestScore(document, for: track, aliases: aliases))
+        candidates[key] = candidate
+        continuation.yield(candidate)
+        return discovered
+    }
+    @discardableResult func addAliases(_ values: [Track]) -> [Track] {
+        var added: [Track] = []
+        for value in values where aliases.count < 4 {
+            guard !aliases.contains(where: { CandidateRanker.normalized($0.title) == CandidateRanker.normalized(value.title)
+                && CandidateRanker.normalized($0.artist) == CandidateRanker.normalized(value.artist) }) else { continue }
+            aliases.append(value); added.append(value)
+        }
+        guard !added.isEmpty else { return [] }
+        for (key, var candidate) in candidates {
+            let score = configuration.bestScore(candidate.document, for: track, aliases: aliases)
+            if score > candidate.score {
+                candidate.score = score; candidates[key] = candidate; continuation.yield(candidate)
+            }
+        }
+        return added
+    }
+    func completed(failed: Bool) { if failed { failures += 1 } else { successes += 1 } }
 }

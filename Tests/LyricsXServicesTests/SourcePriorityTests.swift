@@ -33,7 +33,7 @@ private func version(_ source: String, translation: String? = nil) -> LyricsDocu
     var config = SourceConfiguration()
     let bilingual = version("LRCLIB", translation: "你好")
     var wordTimed = version("NetEase")
-    wordTimed.lines[0].words = [.init(text: "Hello", start: 1, end: 2)]
+    wordTimed.lines[0].words = [.init(text: "Hel", start: 1, end: 1.5), .init(text: "lo", start: 1.5, end: 2)]
     #expect(config.selectionScore(wordTimed, for: rankingTrack) > config.selectionScore(bilingual, for: rankingTrack))
     config.preferWordTiming = false
     #expect(config.selectionScore(bilingual, for: rankingTrack) > config.selectionScore(wordTimed, for: rankingTrack))
@@ -45,7 +45,7 @@ private func version(_ source: String, translation: String? = nil) -> LyricsDocu
     wrong.artist = "Someone Else"; wrong.title = "Unrelated"
     #expect(config.selectionScore(wrong, for: rankingTrack) == 0)
     wrong = version("LRCLIB", translation: "你好"); wrong.duration = 250
-    #expect(config.selectionScore(wrong, for: rankingTrack) == 0)
+    #expect(config.selectionScore(wrong, for: rankingTrack) >= 60)
     let plain = LyricsDocument(title: "Song", artist: "Artist", source: "LRCLIB", duration: 180, plainText: "Hello")
     let timed = version("Musixmatch")
     #expect(config.selectionScore(timed, for: rankingTrack) > config.selectionScore(plain, for: rankingTrack))
@@ -58,7 +58,7 @@ private func version(_ source: String, translation: String? = nil) -> LyricsDocu
     let config = SourceConfiguration()
     var staleDuration = version("NetEase", translation: "你好")
     staleDuration.duration = 999
-    #expect(config.selectionScore(staleDuration, for: rankingTrack) == 0)
+    #expect(config.selectionScore(staleDuration, for: rankingTrack) >= 60)
     #expect(config.fallbackSelectionScore(staleDuration, for: rankingTrack) != nil)
     staleDuration.artist = "Someone Else"
     #expect(config.fallbackSelectionScore(staleDuration, for: rankingTrack) == nil)

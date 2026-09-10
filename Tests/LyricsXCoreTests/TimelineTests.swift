@@ -83,9 +83,20 @@ private let song = Track(playerID: "test", playerName: "Test", title: "Song", du
     let word = WordCue(text: "hello", start: 10, end: 12)
     #expect(word.progress(at: 9) == 0); #expect(word.progress(at: 11) == 0.5); #expect(word.progress(at: 20) == 1)
 }
-@Test func differentArtistsAndLiveDurationsAreRejected() {
+@Test func durationIsSupportingEvidenceAndDoesNotRejectExactSongMetadata() {
     let track = Track(playerID: "test", playerName: "", title: "Song", artist: "Singer", duration: 180)
     #expect(CandidateRanker.score(.init(title: "Song", artist: "Another", duration: 180), for: track) == 0)
-    #expect(CandidateRanker.score(.init(title: "Song", artist: "Singer", duration: 230), for: track) == 0)
+    #expect(CandidateRanker.score(.init(title: "Song", artist: "Singer", duration: 230), for: track) >= 60)
+    #expect(CandidateRanker.score(.init(title: "Song", artist: "Singer", duration: 120), for: track) >= 60)
+    #expect(CandidateRanker.score(.init(title: "Song Live", artist: "Singer", duration: 230), for: track) == 0)
     #expect(CandidateRanker.score(.init(title: "ＳＯＮＧ", artist: "singer", duration: 180), for: track) >= 90)
+}
+
+@Test func reliablePauseWithoutProgressFreezesTheCurrentPosition() {
+    var clock = PlaybackTimeline()
+    clock.accept(.init(track: song, position: 40, isPlaying: true, sampledAt: 100))
+    clock.accept(.init(track: song, position: 0, isPlaying: false, sampledAt: 101, positionIsReliable: false))
+    #expect(!clock.isPlaying && clock.position(at: 200) == 41)
+    clock.accept(.init(track: song, position: 0, isPlaying: true, sampledAt: 201, positionIsReliable: false))
+    #expect(clock.isPlaying && clock.position(at: 202) == 42)
 }

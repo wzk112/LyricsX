@@ -27,22 +27,20 @@ final class AppModel {
     @ObservationIgnored private var artworkIdentity: String?
     @ObservationIgnored private var artworkBytes: Data?
     @ObservationIgnored private var wakeObservers: [NSObjectProtocol] = []
-    @ObservationIgnored private let playerErrorDelay: Duration
-    @ObservationIgnored private var pendingPlayerError: String?
-    @ObservationIgnored private var playerErrorTask: Task<Void, Never>?
+    @ObservationIgnored private var presentationStopped = false
 
-    init(repository: (any LyricsRepository)? = nil, preferences: Preferences = Preferences(), playerErrorDelay: Duration = .milliseconds(1250)) {
+    init(repository: (any LyricsRepository)? = nil, preferences: Preferences = Preferences()) {
         self.preferences = preferences
-        self.playerErrorDelay = playerErrorDelay
-        store = LyricsStore(cache: LyricsCache(directory: preferences.directory), configuration: Preferences.sourceConfiguration)
+        let configurationReader = preferences.sourceConfigurationReader
+        store = LyricsStore(cache: LyricsCache(directory: preferences.directory), configuration: { configurationReader.read() })
         session = LyricsSession(repository: repository ?? store)
         bridge.onSnapshot = { [weak self] snapshot in
             guard let self else { return }
             self.session.accept(snapshot, shouldSearch: !self.lyricsBlocked(for: snapshot.track))
-            self.updateArtwork(snapshot.track)
+            self.updateArtwork(self.session.track)
         }
         bridge.onError = { [weak self] error in
-            self?.receivePlayerError(error)
+            self?.playerError = error
         }
         bridge.onCommandResult = { [weak self] command, succeeded in
             guard case .seek = command, !succeeded else { return }
@@ -50,8 +48,15 @@ final class AppModel {
             self?.bridge.refresh()
         }
     }
+    var overlayUsesCompactPresentation: Bool {
+        guard let document = session.document else { return true }
+        return !document.isSynced || document.isLikelyInstrumentalPlaceholder
+    }
+
     func start() {
         guard ticker == nil else { return }
+        presentationStopped = false
+        observeDockVisibility()
         overlay = OverlayController(model: self)
         bridge.mode = preferences.playerMode
         bridge.start()
@@ -73,7 +78,7 @@ final class AppModel {
         }
     }
     func stop() {
-        ticker?.cancel(); ticker = nil; artworkTask?.cancel(); playerErrorTask?.cancel(); playerErrorTask = nil
+        ticker?.cancel(); ticker = nil; artworkTask?.cancel(); presentationStopped = true
         overlay?.stop(); bridge.stop(); session.stop()
         for token in wakeObservers { NSWorkspace.shared.notificationCenter.removeObserver(token) }
     }
@@ -81,25 +86,12 @@ final class AppModel {
         bridge.send(.toggle)
     }
 
-    private func receivePlayerError(_ error: String?) {
-        guard let error else {
-            pendingPlayerError = nil
-            playerErrorTask?.cancel(); playerErrorTask = nil
-            playerError = nil
-            return
-        }
-        // A pause, seek, or track switch can make one poll fail while the next
-        // one is already valid. Do not flash a source error for that gap.
-        guard playerError != error, pendingPlayerError != error else { return }
-        pendingPlayerError = error
-        playerErrorTask?.cancel()
-        let delay = playerErrorDelay
-        playerErrorTask = Task { [weak self] in
-            do { try await Task.sleep(for: delay) } catch { return }
-            guard let self, self.pendingPlayerError == error else { return }
-            self.playerError = error
-            self.pendingPlayerError = nil
-            self.playerErrorTask = nil
+    private func observeDockVisibility() {
+        guard !presentationStopped else { return }
+        withObservationTracking {
+            _ = NSApp.setActivationPolicy(preferences.showDockIcon ? .regular : .accessory)
+        } onChange: { [weak self] in
+            Task { @MainActor in self?.observeDockVisibility() }
         }
     }
     func seek(_ time: Double) {

@@ -44,16 +44,15 @@ public final class LyricsSession {
             isPlaying = false
         }
         if let target = pendingSeekTarget,
+           snapshot.positionIsReliable,
            snapshot.track?.id == track?.id,
            abs(snapshot.position - target) <= 2.5 {
             seekProtectionUntil = 0
             pendingSeekTarget = nil
         }
-        if now >= seekProtectionUntil,
-           snapshot.positionIsReliable,
-           snapshot.playbackStateIsReliable {
-            timeline.accept(snapshot)
-        }
+        var clockSample = snapshot
+        if now < seekProtectionUntil { clockSample.positionIsReliable = false }
+        timeline.accept(clockSample)
         if isPlaying != timeline.isPlaying { isPlaying = timeline.isPlaying }
         tick(now: now)
         if !shouldSearch {

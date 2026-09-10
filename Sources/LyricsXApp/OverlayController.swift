@@ -42,12 +42,16 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private var wasPlaying = false
     private var stopped = false
     private var dragging = false
+    private var resizing = false
+    private var restoring = true
+    private var anchorCenter: NSPoint?
     private var hoverTimer: Timer?
     private var screenObserver: NSObjectProtocol?
 
-    var isRenderingLyrics: Bool { lastVisible && !hoverHidden }
+    var isRenderingLyrics: Bool { lastVisible && !hoverHidden && !model.overlayUsesCompactPresentation }
     var controlsView: NSView { controls }
     private var positionDefaultsKey: String? { frameAutosaveName.map { "LyricsX.OverlayPosition.\($0)" } }
+    private var centerDefaultsKey: String? { frameAutosaveName.map { "LyricsX.OverlayCenter.\($0)" } }
 
     init(model: AppModel, frameAutosaveName: String? = "LyricsXModernOverlay") {
         self.model = model
@@ -116,21 +120,29 @@ final class OverlayController: NSObject, NSWindowDelegate {
         controlPanel.setAccessibilityParent(panel)
         panel.setAccessibilityChildren([content])
         let restoredPosition: Bool
-        if let key = positionDefaultsKey,
+        // Restore the previous dimensions before migrating an old origin. The
+        // compact and lyric layouts now share one persistent center anchor.
+        let restoredLegacyFrame = frameAutosaveName.map { panel.setFrameUsingName($0) } ?? false
+        if let key = centerDefaultsKey, let value = UserDefaults.standard.string(forKey: key) {
+            anchorCenter = NSPointFromString(value)
+            restoredPosition = true
+        } else if let key = positionDefaultsKey,
            let value = UserDefaults.standard.string(forKey: key) {
             panel.setFrameOrigin(NSPointFromString(value))
             restoredPosition = true
         } else {
-            restoredPosition = frameAutosaveName.map { panel.setFrameUsingName($0) } ?? false
+            restoredPosition = restoredLegacyFrame
         }
         if !restoredPosition, let screen = NSScreen.main {
             panel.setFrameOrigin(NSPoint(x: screen.visibleFrame.midX - panel.frame.width / 2, y: screen.visibleFrame.minY + 90))
         }
+        if anchorCenter == nil { anchorCenter = NSPoint(x: panel.frame.midX, y: panel.frame.midY) }
         screenObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.restoreOnScreen() }
         }
         restoreOnScreen()
         observeConfiguration()
+        restoring = false
     }
 
     private func observeConfiguration() {
@@ -175,11 +187,17 @@ final class OverlayController: NSObject, NSWindowDelegate {
         case "both": secondaryHeight = (prefs.translationFontSize + prefs.nextLineFontSize) * 1.4 + prefs.overlayPrimarySpacing + prefs.overlaySecondarySpacing
         default: secondaryHeight = prefs.translationFontSize * 1.4 + prefs.overlayPrimarySpacing
         }
-        let size = NSSize(width: width, height: max(110, prefs.fontSize * 2.3 + 46 + secondaryHeight))
+        let size = model.overlayUsesCompactPresentation
+            ? NSSize(width: min(width, 400), height: 108)
+            : NSSize(width: width, height: max(110, prefs.fontSize * 2.3 + 46 + secondaryHeight))
         if lastSize != size {
             lastSize = size
-            panel.setContentSize(size)
+            resizing = true
+            let center = anchorCenter ?? NSPoint(x: panel.frame.midX, y: panel.frame.midY)
+            panel.setFrame(NSRect(x: center.x - size.width / 2, y: center.y - size.height / 2,
+                                 width: size.width, height: size.height), display: true)
             restoreOnScreen()
+            resizing = false
         }
         let needsHoverTracking = visible
         if needsHoverTracking && hoverTimer == nil {
@@ -261,12 +279,23 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     func restoreOnScreen() {
-        guard let screen = NSScreen.screens.first(where: { $0.visibleFrame.intersects(panel.frame) }) ?? NSScreen.main else { return }
+        let center = anchorCenter ?? NSPoint(x: panel.frame.midX, y: panel.frame.midY)
+        let anchoredScreen = NSScreen.screens.first(where: { $0.visibleFrame.contains(center) })
+        guard let screen = anchoredScreen ?? NSScreen.main else { return }
         var frame = panel.frame
         frame.size.width = min(frame.width, screen.visibleFrame.width)
+        frame.origin = NSPoint(x: center.x - frame.width / 2, y: center.y - frame.height / 2)
         frame.origin.x = max(screen.visibleFrame.minX, min(frame.minX, screen.visibleFrame.maxX - frame.width))
         frame.origin.y = max(screen.visibleFrame.minY, min(frame.minY, screen.visibleFrame.maxY - frame.height))
+        let wasResizing = resizing; resizing = true
         if frame != panel.frame { panel.setFrame(frame, display: true) }
+        resizing = wasResizing
+        // A disconnected monitor needs a new usable anchor. Merely clamping a
+        // larger lyric layout at the edge must not overwrite the compact anchor.
+        if anchoredScreen == nil {
+            anchorCenter = NSPoint(x: frame.midX, y: frame.midY)
+            if !restoring { saveFrame() }
+        }
         positionControlPanel()
     }
 
@@ -278,10 +307,13 @@ final class OverlayController: NSObject, NSWindowDelegate {
     func windowDidMove(_ notification: Notification) {
         // Inline controls are part of this window, so dragging needs no second
         // window update, timer, animation, or end-of-drag position correction.
-        if !dragging { saveFrame() }
+        if !dragging && !resizing && !restoring { saveFrame() }
     }
 
     private func saveFrame() {
+        guard !restoring else { return }
+        anchorCenter = NSPoint(x: panel.frame.midX, y: panel.frame.midY)
+        if let key = centerDefaultsKey, let center = anchorCenter { UserDefaults.standard.set(NSStringFromPoint(center), forKey: key) }
         if let frameAutosaveName { panel.saveFrame(usingName: frameAutosaveName) }
         if let key = positionDefaultsKey { UserDefaults.standard.set(NSStringFromPoint(panel.frame.origin), forKey: key) }
     }
@@ -307,18 +339,29 @@ struct OverlayView: View {
     private var lyricIdentity: String {
         "\(model.session.track?.id ?? "idle")-\(model.session.document?.id.description ?? placeholder)-\(line?.id ?? -1)"
     }
-    private var showsTitleOnly: Bool {
-        guard let document = model.session.document else { return model.session.track != nil }
-        guard document.isSynced, !document.isLikelyInstrumentalPlaceholder else { return true }
-        return !document.lines.contains { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-    }
     var body: some View {
         VStack(spacing: 0) {
-            if showsTitleOnly {
-                Text(model.session.track?.title ?? "LyricsX")
-                    .font(.system(size: model.preferences.fontSize, weight: .semibold))
-                    .multilineTextAlignment(.center).lineLimit(2).minimumScaleFactor(0.6)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if model.overlayUsesCompactPresentation {
+                // Reserve the same top strip for controls in both layouts.
+                Spacer(minLength: 22)
+                HStack(spacing: 12) {
+                    Group {
+                        if let artwork = model.artwork {
+                            Image(nsImage: artwork).resizable().scaledToFill()
+                        } else {
+                            ZStack { Color.white.opacity(0.08); Image(systemName: "music.note").font(.system(size: 18)) }
+                        }
+                    }.frame(width: 42, height: 42).clipShape(.rect(cornerRadius: 9))
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(model.session.track?.title ?? "LyricsX")
+                            .font(.system(size: 17, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.8)
+                        if let artist = model.session.track?.artist, !artist.isEmpty {
+                            Text(artist).font(.system(size: 12, weight: .medium)).lineLimit(1).opacity(0.8)
+                        }
+                    }.shadow(color: .black.opacity(0.8), radius: 2, y: 1)
+                    Spacer(minLength: 0)
+                }.frame(maxWidth: .infinity, alignment: .leading)
+                Spacer(minLength: 2)
             } else {
                 HStack(spacing: 6) {
                     Text(model.session.track?.title ?? "LyricsX").lineLimit(1)

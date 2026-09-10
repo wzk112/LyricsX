@@ -7,6 +7,7 @@ import LyricsXServices
 @Observable @MainActor
 final class Preferences {
     @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored nonisolated let sourceConfigurationReader: SourceConfigurationReader
     var overlayVisible: Bool { didSet { save("overlayVisible", overlayVisible) } }
     var overlayLocked: Bool { didSet { save("overlayLocked", overlayLocked) } }
     var overlayClickThrough: Bool { didSet { save("overlayClickThrough", overlayClickThrough) } }
@@ -22,6 +23,7 @@ final class Preferences {
     var showTranslation: Bool { didSet { save("showTranslation", showTranslation) } }
     var showMenubarLyrics: Bool { didSet { save("showMenubarLyrics", showMenubarLyrics) } }
     var showMenuBarIcon: Bool { didSet { save("showMenuBarIcon", showMenuBarIcon) } }
+    var showDockIcon: Bool { didSet { save("showDockIcon", showDockIcon) } }
     var combinedMenubarLyrics: Bool { didSet { save("combinedMenubarLyrics", combinedMenubarLyrics) } }
     var blockedTracks: [String] { didSet { save("blockedTracks", blockedTracks) } }
     var blockedAlbums: [String] { didSet { save("blockedAlbums", blockedAlbums) } }
@@ -40,6 +42,7 @@ final class Preferences {
     var overlaySecondarySpacing: Double { max(8, max(translationFontSize, nextLineFontSize) * 0.6) }
     init(defaults d: UserDefaults = .standard) {
         defaults = d
+        sourceConfigurationReader = SourceConfigurationReader(defaults: d)
         overlayVisible = d.object(forKey: "overlayVisible") as? Bool ?? true
         overlayLocked = d.bool(forKey: "overlayLocked")
         overlayClickThrough = d.bool(forKey: "overlayClickThrough")
@@ -59,6 +62,7 @@ final class Preferences {
         showTranslation = d.object(forKey: "showTranslation") as? Bool ?? true
         showMenubarLyrics = d.bool(forKey: "showMenubarLyrics")
         showMenuBarIcon = d.object(forKey: "showMenuBarIcon") as? Bool ?? true
+        showDockIcon = d.object(forKey: "showDockIcon") as? Bool ?? true
         combinedMenubarLyrics = d.object(forKey: "combinedMenubarLyrics") as? Bool ?? true
         blockedTracks = d.stringArray(forKey: "blockedTracks") ?? []
         blockedAlbums = d.stringArray(forKey: "blockedAlbums") ?? []
@@ -109,14 +113,21 @@ final class Preferences {
         default: text
         }
     }
-    nonisolated static func sourceConfiguration() -> SourceConfiguration {
+}
+
+/// UserDefaults is thread-safe. Keep the exact settings store used by the UI,
+/// including test/profile suites, instead of rereading a separate global store.
+final class SourceConfigurationReader: @unchecked Sendable {
+    private let defaults: UserDefaults
+    init(defaults: UserDefaults) { self.defaults = defaults }
+    func read() -> SourceConfiguration {
         var config = SourceConfiguration()
-        let disabled = UserDefaults.standard.stringArray(forKey: "disabledSources") ?? []
+        let disabled = defaults.stringArray(forKey: "disabledSources") ?? []
         config.enabled = Set(SourceConfiguration.defaultOrder).subtracting(disabled)
-        config.sourceOrder = SourceConfiguration.normalizedOrder(UserDefaults.standard.stringArray(forKey: "sourceOrder") ?? [])
-        config.preferBilingual = UserDefaults.standard.object(forKey: "preferBilingual") as? Bool ?? true
-        config.preferWordTiming = UserDefaults.standard.object(forKey: "preferWordTiming") as? Bool ?? true
-        config.strictMatching = UserDefaults.standard.object(forKey: "strictLyricsMatching") as? Bool ?? true
+        config.sourceOrder = SourceConfiguration.normalizedOrder(defaults.stringArray(forKey: "sourceOrder") ?? [])
+        config.preferBilingual = defaults.object(forKey: "preferBilingual") as? Bool ?? true
+        config.preferWordTiming = defaults.object(forKey: "preferWordTiming") as? Bool ?? true
+        config.strictMatching = defaults.object(forKey: "strictLyricsMatching") as? Bool ?? true
         config.musixmatchToken = TokenStore.read()
         return config
     }

@@ -67,6 +67,27 @@ public struct LyricLine: Codable, Hashable, Sendable, Identifiable {
     public var translation: String?
     public var words: [WordCue]
     public var attachments: [String: String]
+    /// Require real, ordered segments that cover the original line. A single
+    /// whole-line cue provides line timing, not progressive word highlighting.
+    public var hasWordTiming: Bool {
+        let segments = words.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        guard segments.count >= 2, words.map(\.text).joined() == text else { return false }
+        var end = time
+        for word in words {
+            guard word.start.isFinite, word.end.isFinite, word.start >= time,
+                  word.end > word.start, word.start >= end - 0.001 else { return false }
+            end = word.end
+        }
+        return true
+    }
+    public var hasTranslation: Bool {
+        guard let translation else { return false }
+        let original = CandidateRanker.normalized(text)
+        return translation.components(separatedBy: .newlines).contains {
+            let value = CandidateRanker.normalized($0)
+            return !value.isEmpty && value != original
+        }
+    }
     public init(id: Int, time: Double, text: String, translation: String? = nil,
                 words: [WordCue] = [], attachments: [String: String] = [:]) {
         self.id = id; self.time = time; self.text = text; self.translation = translation
@@ -96,13 +117,8 @@ public struct LyricsDocument: Codable, Hashable, Sendable, Identifiable {
         self.plainText = plainText; self.offsetMilliseconds = offsetMilliseconds
         self.isInstrumental = isInstrumental; self.originalLRC = originalLRC; self.artworkURL = artworkURL
     }
-    public var hasWordTiming: Bool { lines.contains { !$0.words.isEmpty } }
-    public var hasTranslation: Bool {
-        lines.contains {
-            guard let translation = $0.translation?.trimmingCharacters(in: .whitespacesAndNewlines), !translation.isEmpty else { return false }
-            return translation != $0.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-    }
+    public var hasWordTiming: Bool { lines.contains(where: { $0.hasWordTiming }) }
+    public var hasTranslation: Bool { lines.contains(where: { $0.hasTranslation }) }
     public var isSynced: Bool { !lines.isEmpty }
     /// Some providers return a short status sentence as a timed lyric instead
     /// of setting their instrumental flag. Only classify it as non-lyrical
@@ -110,12 +126,15 @@ public struct LyricsDocument: Codable, Hashable, Sendable, Identifiable {
     /// hidden merely because one lyric happens to contain a matching word.
     public var isLikelyInstrumentalPlaceholder: Bool {
         guard !isInstrumental else { return true }
-        let textLines = lines.map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        let originalLines = lines.isEmpty ? (plainText ?? "").components(separatedBy: .newlines) : lines.map(\.text)
+        let textLines = originalLines.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         guard textLines.count <= 3 else { return false }
         guard !textLines.isEmpty else { return true }
-        let normalized = Self.normalizedPlaceholderText(textLines.joined(separator: " "))
-        if Self.instrumentalPlaceholderPhrases.contains(where: { normalized.contains($0) }) { return true }
-        return textLines.allSatisfy(Self.isOnlyMusicNotation)
+        // Every substantive line must be a recognized status phrase. A lyric
+        // containing "instrumental" or "纯音乐" is not itself a placeholder.
+        return Self.matchesPlaceholder(textLines.joined()) || textLines.allSatisfy {
+            Self.matchesPlaceholder($0) || Self.isOnlyMusicNotation($0)
+        }
     }
 
     // The list covers wording returned by the providers we support and common
@@ -123,14 +142,24 @@ public struct LyricsDocument: Codable, Hashable, Sendable, Identifiable {
     // Punctuation and whitespace are discarded before matching, so forms such
     // as "♪ 纯音乐，请欣赏 ♪" and "No lyrics available" are equivalent.
     private static let instrumentalPlaceholderPhrases: Set<String> = [
-        "纯音乐", "纯音樂", "无歌词", "無歌詞", "没有歌词", "沒有歌詞", "暂无歌词", "暫無歌詞",
+        "纯音乐", "純音樂", "纯音樂", "无歌词", "無歌詞", "没有歌词", "沒有歌詞", "暂无歌词", "暫無歌詞",
         "未填词", "未填詞", "无填词", "無填詞", "没有填词", "沒有填詞", "间奏", "間奏",
         "instrumental", "instrumentalmusic", "instrumentalonly", "instrumentalversion", "interlude",
-        "nolyric", "nolyrics", "lyricsunavailable", "lyricsnotavailable", "musiconly",
+        "nolyric", "nolyrics", "nolyricsavailable", "lyricsunavailable", "lyricsnotavailable", "musiconly",
+        "instrumentalpleaseenjoy", "instrumentalmusicpleaseenjoy", "thissongisinstrumental", "thissonghasnolyrics",
         "インスト", "インストゥルメンタル", "歌詞なし", "歌詞無し", "歌詞はありません", "歌詞がありません", "間奏",
         "연주곡", "가사없음", "가사가없습니다", "가사가없어요",
-        "musiqueinstrumentale", "sansparoles", "sinletra", "sinletras", "keintext", "ohnegesang"
+        "musiqueinstrumentale", "sansparoles", "sinletra", "sinletras", "keintext", "ohnegesang",
+        "semletra", "semletras", "strumentale", "senzatesto", "безслов", "инструментал", "инструментальнаямузыка"
     ]
+
+    private static let chinesePlaceholderPattern = "^(此歌曲为|此歌曲為|本歌曲为|本歌曲為|本歌曲|此歌曲|该歌曲为|該歌曲為|这首歌是|這首歌是|本曲为|本曲為|本曲|此曲为|此曲為|此曲)?((没有|沒有|未|无|無)(填词|填詞|歌词|歌詞)的)?(纯音乐|純音樂|纯音樂|无歌词|無歌詞|暂无歌词|暫無歌詞|没有歌词|沒有歌詞|没有填词|沒有填詞|未填词|未填詞|纯伴奏|純伴奏|伴奏)(请欣赏|請欣賞|请您欣赏|請您欣賞|请欣赏音乐|請欣賞音樂|敬请欣赏|敬請欣賞|请聆听|請聆聽)?$"
+
+    private static func matchesPlaceholder(_ text: String) -> Bool {
+        let normalized = normalizedPlaceholderText(text)
+        return instrumentalPlaceholderPhrases.contains(normalized)
+            || normalized.range(of: chinesePlaceholderPattern, options: .regularExpression) != nil
+    }
 
     private static func normalizedPlaceholderText(_ text: String) -> String {
         text.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))

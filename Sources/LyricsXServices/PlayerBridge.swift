@@ -29,8 +29,8 @@ public struct SystemMediaPayload: Decodable, Sendable {
 
     public func snapshot(now: Double, wallTime: Double = Date().timeIntervalSince1970, isIOSApp: Bool = false) -> PlaybackSnapshot {
         guard var title, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return PlaybackSnapshot(track: nil, position: 0, isPlaying: false, sampledAt: now,
-                                    positionIsReliable: false, playbackStateIsReliable: false)
+            return PlaybackSnapshot(track: nil, position: 0, isPlaying: isPlaying == true, sampledAt: now,
+                                    positionIsReliable: false, playbackStateIsReliable: isPlaying != nil)
         }
         var artist = artist ?? ""
         if isIOSApp {
@@ -80,7 +80,7 @@ public final class PlayerBridge {
     public var onSnapshot: ((PlaybackSnapshot) -> Void)?
     public var onError: ((String?) -> Void)?
     public var onCommandResult: ((PlayerCommand, Bool) -> Void)?
-    public var mode: PlayerMode = .automatic { didSet { restart() } }
+    public var mode: PlayerMode = .automatic { didSet { if mode != oldValue { continuity = .init(); scriptTarget = nil; restart() } } }
     private var loop: Task<Void, Never>?
     private var pollTask: Task<Void, Never>?
     private var revision: UInt64 = 0
@@ -91,7 +91,18 @@ public final class PlayerBridge {
     private var artworkCacheID = ""
     private var artworkCacheData: Data?
     private var scriptTarget: String?
+    private var refreshPending = false
+    private var continuity = PlaybackContinuity()
+    private var artworkAttempts = 0
+    private var snapshotReader: (@MainActor () async throws -> PlaybackSnapshot)?
+    private var commandExecutor: (@MainActor (PlayerCommand) async throws -> Void)?
+    private var now: @MainActor () -> Double = { ProcessInfo.processInfo.systemUptime }
     public init() {}
+    init(snapshotReader: @escaping @MainActor () async throws -> PlaybackSnapshot,
+         commandExecutor: (@MainActor (PlayerCommand) async throws -> Void)? = nil,
+         now: @escaping @MainActor () -> Double = { ProcessInfo.processInfo.systemUptime }) {
+        self.snapshotReader = snapshotReader; self.commandExecutor = commandExecutor; self.now = now
+    }
     public func start() {
         guard loop == nil else { return }
         for name in ["com.apple.iTunes.playerInfo", "com.spotify.client.PlaybackStateChanged"] {
@@ -108,24 +119,47 @@ public final class PlayerBridge {
     }
     public func stop() {
         revision &+= 1; loop?.cancel(); loop = nil; pollTask?.cancel(); pollTask = nil
+        refreshPending = false
         commandTask?.cancel(); commandTask = nil; commandQueue.removeAll()
         for token in observers { DistributedNotificationCenter.default().removeObserver(token) }; observers = []
     }
     public func restart() { stop(); latestScriptID = ""; artworkCacheID = ""; artworkCacheData = nil; start() }
     public func refresh() {
-        guard pollTask == nil, commandTask == nil else { return }
+        guard pollTask == nil, commandTask == nil else { refreshPending = true; return }
         let generation = revision
         pollTask = Task { [weak self] in
             guard let self else { return }
-            defer { if self.revision == generation { self.pollTask = nil } }
-            do {
-                let snapshot = try await self.readSnapshot()
-                guard !Task.isCancelled, self.revision == generation else { return }
-                self.onError?(nil); self.onSnapshot?(snapshot)
-            } catch {
-                guard !Task.isCancelled, self.revision == generation else { return }
-                self.onError?(error.localizedDescription)
+            defer {
+                if self.revision == generation {
+                    self.pollTask = nil
+                    if self.refreshPending { self.refreshPending = false; self.refresh() }
+                }
             }
+            await self.poll(generation: generation)
+        }
+    }
+    private func poll(generation: UInt64) async {
+        // Retry gaps promptly; notifications arriving during a poll are queued.
+        // A command invalidates the old read before a new result can publish.
+        for attempt in 0..<3 {
+            do {
+                let raw: PlaybackSnapshot
+                if let snapshotReader { raw = try await snapshotReader() }
+                else { raw = try await readSnapshot() }
+                guard !Task.isCancelled, revision == generation else { return }
+                if let snapshot = continuity.accept(raw, now: now()) {
+                    onError?(nil); onSnapshot?(snapshot)
+                }
+                if raw.track != nil || attempt == 2 { return }
+            } catch {
+                guard !Task.isCancelled, revision == generation else { return }
+                if let error = error as? BridgeError, error == .automation || error == .bundle {
+                    onError?(error.localizedDescription); return
+                }
+                if continuity.shouldReportFailure(now: now()) { onError?(error.localizedDescription) }
+                if attempt == 2 { return }
+            }
+            do { try await Task.sleep(for: .milliseconds(150)) } catch { return }
         }
     }
     public func send(_ command: PlayerCommand) {
@@ -176,6 +210,7 @@ public final class PlayerBridge {
         }
     }
     private func execute(_ command: PlayerCommand) async throws {
+        if let commandExecutor { try await commandExecutor(command); return }
         if let target = mode.bundleID ?? scriptTarget {
             let operation: String
             switch command {
@@ -201,7 +236,6 @@ public final class PlayerBridge {
     private func readSnapshot() async throws -> PlaybackSnapshot {
         if let target = mode.bundleID { scriptTarget = target; return try await readScript(target) }
         let previousScriptTarget = scriptTarget
-        scriptTarget = nil
         do {
             let result = try await runMedia(["update_player_state"])
             guard result.status == 0 else { throw BridgeError.unavailable }
@@ -210,7 +244,16 @@ public final class PlayerBridge {
                 guard let item = try? JSONDecoder().decode(Envelope.self, from: Data(line.utf8)), item.notificationName.contains("NowPlayingInfoDidChange") else { continue }
                 let running = item.payload.processIdentifier.flatMap { NSRunningApplication(processIdentifier: $0) }
                 let isIOS = MediaController.isiOSAppOnMac(runningApp: running)
-                return item.payload.snapshot(now: ProcessInfo.processInfo.systemUptime, isIOSApp: isIOS)
+                let snapshot = item.payload.snapshot(now: ProcessInfo.processInfo.systemUptime, isIOSApp: isIOS)
+                guard let track = snapshot.track else { throw BridgeError.unavailable }
+                // Use the same metadata source during playback and pause, so
+                // falling back does not alternate persistent song identities.
+                if ["com.apple.Music", "com.spotify.client"].contains(track.playerID) {
+                    scriptTarget = track.playerID
+                    return try await readScript(track.playerID)
+                }
+                scriptTarget = nil
+                return snapshot
             }
             throw BridgeError.unavailable
         } catch {
@@ -236,6 +279,9 @@ public final class PlayerBridge {
                 scriptTarget = first.id
                 return first.value
             }
+            if runningIDs.isEmpty, continuity.latest?.track.map({ NSRunningApplication.runningApplications(withBundleIdentifier: $0.playerID).isEmpty }) != false {
+                return PlaybackSnapshot(track: nil, position: 0, isPlaying: false)
+            }
             throw error
         }
     }
@@ -245,9 +291,10 @@ public final class PlayerBridge {
         guard FileManager.default.fileExists(atPath: library.path) else { throw BridgeError.bundle }
         return try await ProcessRunner.run("/usr/bin/perl", arguments: [script.path, library.path] + command)
     }
-    private struct ScriptRecord: Decodable {
+    struct ScriptRecord: Decodable {
         var title: String?; var artist: String?; var album: String?; var id: String?; var duration: Double?
         var position: Double?; var playing: Bool?; var artwork: String?; var lyrics: String?; var location: String?
+        var coherent: Bool?
     }
     private func readScript(_ target: String) async throws -> PlaybackSnapshot {
         guard !NSRunningApplication.runningApplications(withBundleIdentifier: target).isEmpty else {
@@ -259,33 +306,46 @@ public final class PlayerBridge {
           const app = Application('\(target)');
           function safe(f, d) { try { const v = f(); return v == null ? d : v; } catch(e) { return d; } }
           if (!app.running()) return '{}';
-          const t = app.currentTrack();
+          const t = safe(() => app.currentTrack(), null);
           const id = String(safe(() => t.\(spotify ? "id" : "persistentID")(), ''));
-          return JSON.stringify({title:safe(() => t.name(), ''),artist:safe(() => t.artist(), ''),album:safe(() => t.album(), ''),id:id,
-            duration:safe(() => t.duration(),0)/\(spotify ? "1000" : "1"),position:safe(() => app.playerPosition(),0),playing:safe(() => app.playerState(),'')==='playing',
-            artwork:\(spotify ? "safe(() => t.artworkUrl(), '')" : "''"),lyrics:\(spotify ? "''" : "safe(() => t.lyrics(), '')"),location:\(spotify ? "''" : "safe(() => t.location().toString(), '')")});
+          const state = safe(() => app.playerState(), null);
+          const result = {title:safe(() => t.name(), ''),artist:safe(() => t.artist(), ''),album:safe(() => t.album(), ''),id:id,
+            duration:safe(() => t.duration(),0)/\(spotify ? "1000" : "1"),position:safe(() => app.playerPosition(),null),
+            playing:state === 'playing' ? true : state === 'paused' || state === 'stopped' ? false : null,
+            artwork:\(spotify ? "safe(() => t.artworkUrl(), '')" : "''"),lyrics:\(spotify ? "''" : "safe(() => t.lyrics(), '')"),location:\(spotify ? "''" : "safe(() => t.location().toString(), '')")};
+          const endID = String(safe(() => app.currentTrack().\(spotify ? "id" : "persistentID")(), ''));
+          result.coherent = id === endID;
+          return JSON.stringify(result);
         }
         """
         let started = ProcessInfo.processInfo.systemUptime
         let output = try await ProcessRunner.run("/usr/bin/osascript", arguments: ["-l", "JavaScript", "-e", source, latestScriptID])
-        guard output.status == 0 else { throw BridgeError.automation }
+        guard output.status == 0 else {
+            throw output.error.contains("-1743") ? BridgeError.automation : BridgeError.unavailable
+        }
         let item = try JSONDecoder().decode(ScriptRecord.self, from: output.data)
+        guard item.coherent != false else { throw BridgeError.unavailable }
+        let sampleTime = (started + ProcessInfo.processInfo.systemUptime) / 2
         guard let title = item.title, !title.isEmpty else {
-            return PlaybackSnapshot(track: nil, position: 0, isPlaying: false,
-                                    positionIsReliable: false, playbackStateIsReliable: false)
+            return PlaybackSnapshot(track: nil, position: 0, isPlaying: item.playing == true, sampledAt: sampleTime,
+                                    positionIsReliable: false, playbackStateIsReliable: item.playing != nil)
         }
         let persistentID = (item.id?.isEmpty == false ? item.id! : [title, item.artist ?? "", item.album ?? ""].joined(separator: "\u{1f}"))
-        latestScriptID = persistentID
-        if !spotify, artworkCacheID != persistentID {
-            artworkCacheID = persistentID
-            artworkCacheData = await readMusicArtwork(expectedID: item.id ?? "")
+        if artworkCacheID != persistentID {
+            artworkCacheID = persistentID; artworkCacheData = nil; artworkAttempts = 0
         }
-        let track = Track(playerID: target, playerName: spotify ? "Spotify" : "Apple Music", persistentID: persistentID, title: title,
+        if !spotify, artworkCacheData == nil, artworkAttempts < 3 {
+            artworkAttempts += 1
+            let data = await readMusicArtwork(expectedID: item.id ?? "")
+            try Task.checkCancellation()
+            artworkCacheData = data
+        }
+        try Task.checkCancellation()
+        latestScriptID = persistentID
+        let track = Track(playerID: target, playerName: spotify ? "Spotify" : "Apple Music", persistentID: item.id ?? "", title: title,
                           artist: item.artist ?? "", album: item.album ?? "", duration: item.duration ?? 0,
-                          artworkData: artworkCacheData,
+                          artworkData: spotify ? nil : artworkCacheData,
                           artworkURL: item.artwork.flatMap(URL.init(string:)), localFileURL: Self.fileURL(item.location), embeddedLyrics: item.lyrics)
-        let finished = ProcessInfo.processInfo.systemUptime
-        let sampleTime = (started + finished) / 2
         return PlaybackSnapshot(
             track: track,
             position: item.position ?? 0,
@@ -332,7 +392,7 @@ public final class PlayerBridge {
               let data = try? Data(contentsOf: outputURL), !data.isEmpty, data.count < 8_000_000 else { return nil }
         return data
     }
-    enum BridgeError: LocalizedError {
+    enum BridgeError: LocalizedError, Equatable {
         case unavailable, automation, bundle, wrongTrack, lyricsWrite
         var errorDescription: String? {
             switch self {

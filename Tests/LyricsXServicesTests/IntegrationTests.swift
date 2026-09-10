@@ -3,6 +3,25 @@ import Testing
 import LyricsXCore
 @testable import LyricsXServices
 
+@Test(.enabled(if: ProcessInfo.processInfo.environment["LYRICSX_DIAG_TITLE"] != nil))
+func diagnoseSearchCandidates() async throws {
+    let env = ProcessInfo.processInfo.environment
+    let track = Track(playerID: "diagnostic", playerName: "", title: try #require(env["LYRICSX_DIAG_TITLE"]),
+                      artist: env["LYRICSX_DIAG_ARTIST"] ?? "", album: env["LYRICSX_DIAG_ALBUM"] ?? "",
+                      duration: Double(env["LYRICSX_DIAG_DURATION"] ?? "0") ?? 0)
+    let cache = LyricsCache(directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+    let store = LyricsStore(cache: cache)
+    var documents: [LyricsDocument] = []
+    for try await value in store.search(track: track, keyword: env["LYRICSX_DIAG_KEYWORD"]) {
+        let doc = value.document
+        documents.append(doc)
+        print("SEARCH_CANDIDATE score=\(value.score) source=\(doc.source) title=\(doc.title) artist=\(doc.artist) duration=\(doc.duration) word=\(doc.hasWordTiming) bilingual=\(doc.hasTranslation) lines=\(doc.lines.count)")
+    }
+    if let output = env["LYRICSX_DIAG_OUTPUT"] {
+        try JSONEncoder().encode(documents).write(to: URL(fileURLWithPath: output))
+    }
+}
+
 @Test(.enabled(if: ProcessInfo.processInfo.environment["LYRICSX_CACHE_AUDIT_PATH"] != nil))
 func existingCacheAuditIsReadOnly() async throws {
     let path = try #require(ProcessInfo.processInfo.environment["LYRICSX_CACHE_AUDIT_PATH"])

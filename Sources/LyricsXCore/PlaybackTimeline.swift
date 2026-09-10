@@ -9,9 +9,14 @@ public struct PlaybackTimeline: Sendable {
     public var maximumExtrapolation = 3.0
     public init() {}
     public mutating func accept(_ snapshot: PlaybackSnapshot) {
-        guard snapshot.position.isFinite, snapshot.sampledAt.isFinite else { return }
-        anchor = max(0, snapshot.position); sampledAt = snapshot.sampledAt
-        isPlaying = snapshot.isPlaying; duration = snapshot.track?.duration ?? 0
+        guard snapshot.sampledAt.isFinite else { return }
+        if snapshot.positionIsReliable, !snapshot.position.isFinite { return }
+        guard snapshot.positionIsReliable || snapshot.playbackStateIsReliable else { return }
+        let current = position(at: snapshot.sampledAt)
+        anchor = snapshot.positionIsReliable ? max(0, snapshot.position) : current
+        sampledAt = snapshot.sampledAt
+        if snapshot.playbackStateIsReliable { isPlaying = snapshot.isPlaying }
+        if let track = snapshot.track, track.duration > 0 { duration = track.duration }
     }
     public func position(at now: Double) -> Double {
         guard now.isFinite else { return anchor }
@@ -27,6 +32,31 @@ public struct PlaybackTimeline: Sendable {
 }
 
 public enum CandidateRanker {
+    public static func equivalentTitle(_ lhs: String, _ rhs: String) -> Bool {
+        TrackSearchText.titles(lhs).contains { a in TrackSearchText.titles(rhs).contains { equivalent(a, $0) } }
+    }
+    public static func compatibleArtists(_ candidate: String, for track: Track) -> Bool {
+        let expected = TrackSearchText.artists(track.artist, title: track.title)
+        if expected.isEmpty { return true }
+        return TrackSearchText.artists(candidate).contains { name in
+            expected.contains { other in
+                let a = normalized(name), b = normalized(other)
+                return equivalent(name, other) || (min(a.count, b.count) >= 3 && (a.contains(b) || b.contains(a)))
+            }
+        }
+    }
+    public static func equivalent(_ lhs: String, _ rhs: String) -> Bool {
+        let left = normalized(lhs), right = normalized(rhs)
+        guard !left.isEmpty, !right.isEmpty else { return false }
+        if left == right { return true }
+        if left.unicodeScalars.allSatisfy({ $0.value < 128 }), right.unicodeScalars.allSatisfy({ $0.value < 128 }) { return false }
+        // Handles kana, Hangul, Cyrillic and diacritics without interpreting a
+        // translated title as equivalent. Catalog IDs provide translated aliases.
+        guard let latinLeft = lhs.applyingTransform(.toLatin, reverse: false),
+              let latinRight = rhs.applyingTransform(.toLatin, reverse: false) else { return false }
+        let a = normalized(latinLeft), b = normalized(latinRight)
+        return a.count >= 3 && a == b
+    }
     public static func normalized(_ value: String) -> String {
         value.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
             .unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) }.map(String.init).joined()
@@ -34,16 +64,20 @@ public enum CandidateRanker {
     public static func score(_ doc: LyricsDocument, for track: Track) -> Double {
         let title = normalized(track.title), candidateTitle = normalized(doc.title)
         guard !title.isEmpty, !candidateTitle.isEmpty,
-              candidateTitle == title || candidateTitle.contains(title) || title.contains(candidateTitle) else { return 0 }
-        var result = candidateTitle == title ? 60.0 : 38.0
+              equivalentTitle(doc.title, track.title) || candidateTitle.contains(title) || title.contains(candidateTitle) else { return 0 }
+        let exactTitle = equivalentTitle(doc.title, track.title)
+        var result = exactTitle ? 60.0 : 38.0
         let artist = normalized(track.artist), candidateArtist = normalized(doc.artist)
         if !artist.isEmpty {
-            guard !candidateArtist.isEmpty, artist == candidateArtist || artist.contains(candidateArtist) || candidateArtist.contains(artist) else { return 0 }
-            result += artist == candidateArtist ? 25 : 15
+            guard !candidateArtist.isEmpty, compatibleArtists(doc.artist, for: track) else { return 0 }
+            result += equivalent(doc.artist, track.artist) ? 25 : 15
         }
         if track.duration > 0, doc.duration > 0 {
             let delta = abs(track.duration - doc.duration)
-            guard delta < max(15, track.duration * 0.08) else { return 0 }
+            // Many sources report the last lyric's timestamp as their length;
+            // the instrumental outro may be much longer. Duration may reject
+            // an ambiguous title, but cannot veto a verified title/artist pair.
+            if !exactTitle, delta >= max(15, track.duration * 0.08) { return 0 }
             result += max(0, 10 - delta)
         }
         if doc.hasWordTiming { result += 3 }

@@ -86,7 +86,7 @@ struct LiveLyricText: View {
     let active: Bool
     let text: String
     var body: some View {
-        if active && !line.words.isEmpty {
+        if active && line.hasWordTiming {
             WordHighlight(line: line, time: document.lyricTime(for: session.position), active: true, text: text)
         } else { Text(text) }
     }
@@ -111,7 +111,7 @@ struct WordHighlight: View {
     let active: Bool
     let text: String
     var body: some View {
-        if active, !line.words.isEmpty, text == line.text {
+        if active, line.hasWordTiming, text == line.text {
             // Character-level opacity follows actual word tags, not a guessed per-line duration.
             Text(attributedText)
         } else { Text(text) }

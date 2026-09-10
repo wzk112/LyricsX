@@ -63,6 +63,11 @@ struct PreferencesView: View {
     private func settingsContent(_ prefs: Preferences) -> some View {
         switch selection ?? .general {
         case .general:
+            settingsGroup("Dock") {
+                Toggle("在 Dock 中显示", isOn: Bindable(prefs).showDockIcon)
+                Text("关闭后隐藏屏幕底部的应用图标。仍可从菜单栏或 ⌥⌘O 打开 LyricsX。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             settingsGroup("菜单栏") {
                 Toggle("显示菜单栏图标", isOn: Bindable(prefs).showMenuBarIcon)
                 Toggle("显示菜单栏歌词", isOn: Bindable(prefs).showMenubarLyrics)
@@ -163,7 +168,7 @@ struct PreferencesView: View {
                 Toggle("双语优先", isOn: Bindable(prefs).preferBilingual)
                 Toggle("逐字优先", isOn: Bindable(prefs).preferWordTiming)
                 Toggle("严格匹配", isOn: Bindable(prefs).strictLyricsMatching)
-                Text("逐字优先会在歌曲匹配且有时间轴时优先选择逐字版本；双语优先和来源排序会继续参与选择。严格匹配开启时会校验歌名、歌手和时长；关闭后会在没有严格结果时接受歌名完全相同、但歌手或时长缺失/格式不同的同步歌词。")
+                Text("先确认歌曲，再依次考虑时间轴、逐字、双语和来源顺序；开启的偏好优先于来源顺序。歌名和歌手匹配时，歌词提前结束不会被排除。关闭严格匹配后也接受歌手信息不完整的同名同步歌词。")
                     .font(.caption).foregroundStyle(.secondary)
             }
             settingsGroup("来源优先级") {
