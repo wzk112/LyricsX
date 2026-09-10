@@ -113,14 +113,15 @@ public final class LyricsStore: LyricsRepository, Sendable {
     typealias SearchBackend = @Sendable (Track, String?, SourceConfiguration, SecureLyricsHTTPClient) -> AsyncThrowingStream<LyricsDocument, Error>
     private let searchBackend: SearchBackend
     private let searchBudget: Duration
+    private let firstResultDelay: Duration
     public init(cache: LyricsCache = LyricsCache(), configuration: @escaping @Sendable () -> SourceConfiguration = { .init() }) {
         self.cache = cache; self.configuration = configuration
-        self.aliasResolver = TrackAliasResolver(); self.searchBackend = Self.providerSearch; self.searchBudget = .seconds(24)
+        self.aliasResolver = TrackAliasResolver(); self.searchBackend = Self.providerSearch; self.searchBudget = .seconds(24); self.firstResultDelay = .seconds(1)
     }
     init(cache: LyricsCache, configuration: @escaping @Sendable () -> SourceConfiguration = { .init() },
-         aliasResolver: TrackAliasResolver, searchBudget: Duration = .seconds(24), searchBackend: @escaping SearchBackend) {
+         aliasResolver: TrackAliasResolver, searchBudget: Duration = .seconds(24), firstResultDelay: Duration = .seconds(1), searchBackend: @escaping SearchBackend) {
         self.cache = cache; self.configuration = configuration; self.aliasResolver = aliasResolver
-        self.searchBackend = searchBackend; self.searchBudget = searchBudget
+        self.searchBackend = searchBackend; self.searchBudget = searchBudget; self.firstResultDelay = firstResultDelay
     }
     public func save(_ document: LyricsDocument, for track: Track) async throws { if track.playerID != "lyricsx.demo" { try await cache.save(document, for: track) } }
     public func lyrics(for track: Track, forceRefresh: Bool) -> AsyncThrowingStream<LyricCandidate, Error> {
@@ -138,28 +139,22 @@ public final class LyricsStore: LyricsRepository, Sendable {
                         continuation.yield(LyricCandidate(document: local, score: 999)); continuation.finish(); return
                     }
                 }
-                var candidates: [LyricCandidate] = []
+                let results = AutomaticSearchResults(continuation)
+                let firstDisplay = Task {
+                    do { try await Task.sleep(for: firstResultDelay) } catch { return }
+                    await results.allowEarlyDisplay()
+                }
+                defer { firstDisplay.cancel() }
                 var failure: Error?
                 do {
-                    let results = search(track: track)
-                    for try await candidate in results {
+                    for try await candidate in search(track: track) {
                         try Task.checkCancellation()
-                        if candidate.score > 0 {
-                            candidates.removeAll { $0.id == candidate.id }
-                            candidates.append(candidate)
-                        }
+                        await results.add(candidate)
                     }
-                    // Do not let the first provider response become visible and
-                    // get cached before the deeper concurrent search completes.
-                    // The session receives the best candidate first, then keeps
-                    // the remaining versions for manual inspection.
                 } catch { failure = error }
                 guard !Task.isCancelled else { continuation.finish(); return }
-                // A slow or failing source must not throw away another source's
-                // usable results collected before the shared search deadline.
-                for candidate in candidates.sorted(by: { $0.score > $1.score }) { continuation.yield(candidate) }
-                if candidates.isEmpty, let failure { continuation.finish(throwing: failure) }
-                else { continuation.finish() }
+                await results.finish(error: failure)
+
             }
             continuation.onTermination = { _ in task.cancel() }
         }

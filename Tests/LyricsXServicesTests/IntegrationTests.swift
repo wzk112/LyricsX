@@ -79,8 +79,12 @@ func liveSearchRecoversAllSourcesAcrossRepeatedSearches() async throws {
     }
     let store = LyricsStore(cache: LyricsCache(directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)))
     var results: [LyricCandidate] = []
-    for try await candidate in store.lyrics(for: track, forceRefresh: true) { results.append(candidate) }
-    let best = try #require(results.first)
+    let started = ContinuousClock.now
+    for try await candidate in store.lyrics(for: track, forceRefresh: true) {
+        if results.isEmpty { print("LIVE_FIRST_LYRIC elapsed=\(started.duration(to: .now)) source=\(candidate.document.source)") }
+        results.append(candidate)
+    }
+    let best = try #require(results.max(by: { $0.score < $1.score }))
     print("LIVE_RECOVERY_WINNER source=\(best.document.source) title=\(best.document.title) bilingual=\(best.document.hasTranslation) word=\(best.document.hasWordTiming)")
     #expect(CandidateRanker.compatibleArtists(best.document.artist, for: track))
     #expect(best.document.hasTranslation)

@@ -18,7 +18,7 @@ struct SearchView: View {
     @State private var trackID: String?
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            HStack { VStack(alignment: .leading, spacing: 5) { Text("找到对的那一句").font(.title2.bold()); Text("搜索多个歌词源，选择最适合当前歌曲的版本。").font(.caption).foregroundStyle(.secondary) }; Spacer(); Button("完成") { dismiss() }.keyboardShortcut(.cancelAction) }
+            HStack { VStack(alignment: .leading, spacing: 5) { Text("找到对的那一句").font(.title2.bold()); Text(searching ? "正在加载歌词，结果会逐步显示…" : "搜索多个歌词源，选择最适合当前歌曲的版本。").font(.caption).foregroundStyle(.secondary) }; Spacer(); Button("完成") { dismiss() }.keyboardShortcut(.cancelAction) }
             HStack {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField("歌曲名和歌手", text: $query).textFieldStyle(.plain).onSubmit(search)
@@ -38,7 +38,7 @@ struct SearchView: View {
             }
             if let error { Text(error).font(.caption).foregroundStyle(.orange) }
             if results.isEmpty {
-                ContentUnavailableView(searching ? "正在搜索歌词" : "暂无结果", systemImage: "text.magnifyingglass", description: Text("也可以将本地 LRC 或 LRCX 文件拖入主窗口。"))
+                ContentUnavailableView(searching ? "正在加载歌词" : "暂无结果", systemImage: "text.magnifyingglass", description: Text("也可以将本地 LRC 或 LRCX 文件拖入主窗口。"))
             } else {
                 List(results) { candidate in
                     HStack(spacing: 14) {

@@ -12,7 +12,7 @@ struct NetEaseResponseSingleLyrics: Decodable {
     // let qfy: Bool
     // let code: Int
     // let transUser: User
-    // 
+    //
 
     struct User: Decodable {
         let nickname: String
@@ -22,13 +22,13 @@ struct NetEaseResponseSingleLyrics: Decodable {
         // let demand: Int
         // let userid: Int
         // let uptime: Int
-        // 
+        //
     }
 
     struct Lyric: Decodable {
         let lyric: String?
 
         // let version: Int
-        // 
+        //
     }
 }

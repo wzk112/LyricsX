@@ -46,7 +46,7 @@ struct NetEaseResponseSearchResult: Decodable {
             // let bMusic: NetEaseResponseModelMusic
             // let mp3Url: URL?
             // let rtype: Int
-            // 
+            //
 
             // let alias: [Any],
             // let ringtone: Any?
@@ -71,7 +71,7 @@ struct NetEaseResponseModelArtist: Decodable {
     // let albumSize: Int
     // let trans: String
     // let musicSize: Int
-    // 
+    //
 
     //  let alias: [Any]
 }
@@ -97,7 +97,7 @@ struct NetEaseResponseModelAlbum: Decodable {
     // let copyrightId: Int
     // let commentThreadId: String
     // let artists: [NetEaseResponseModelArtist]
-    // 
+    //
 
     // let songs: [Any]
     // let alias: [Any]
@@ -112,7 +112,7 @@ struct NetEaseResponseModelMusic: Decodable {
     // let bitrate: Int
     // let playTime: Int
     // let volumeDelta: Double
-    // 
+    //
 
     // let name: Any?
 }

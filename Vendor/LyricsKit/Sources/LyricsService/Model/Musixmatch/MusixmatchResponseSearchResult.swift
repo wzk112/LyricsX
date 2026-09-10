@@ -43,7 +43,7 @@ struct MusixmatchResponseSearchResult: Decodable {
             if let s = albumCoverart100x100, !s.isEmpty { return s }
             return ""
         }
-        
+
         let albumCoverart100x100: String?
         let albumCoverart350x350: String?
         let albumCoverart500x500: String?

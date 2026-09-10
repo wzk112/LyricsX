@@ -174,3 +174,120 @@ private final class StatusRecorder: @unchecked Sendable {
     config.preferWordTiming = false
     #expect(config.manualPrecedes(kugou, word))
 }
+
+private actor QQPageClient: HTTPClient {
+    var pages: [Int] = []
+    var sizes: [Int] = []
+    var failLaterPages = false
+    let flakyFirstPage: Bool
+    init(failLaterPages: Bool = false, flakyFirstPage: Bool = false) { self.failLaterPages = failLaterPages; self.flakyFirstPage = flakyFirstPage }
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        let url = request.url!
+        let response: Data
+        if url.path.contains("smartbox") {
+            response = flakyFirstPage
+                ? Data(#"{"code":0,"data":{"song":{"itemlist":[{"id":"0","mid":"id0","name":"Version 0","singer":"Singer"}]}}}"#.utf8)
+                : Data(#"{"code":0,"data":{}}"#.utf8)
+        } else if url.path.contains("musicu") {
+            let json = try JSONSerialization.jsonObject(with: request.httpBody!) as! [String: Any]
+            if json["songinfo"] != nil { throw URLError(.resourceUnavailable) }
+            let param = (json["req_1"] as! [String: Any])["param"] as! [String: Any]
+            let page = param["page_num"] as! Int, size = param["num_per_page"] as! Int
+            pages.append(page); sizes.append(size)
+            if failLaterPages, page > 1 { throw URLError(.timedOut) }
+            // Reproduce the real endpoint's empty-success response above 20.
+            let songs: [[String: Any]] = size > 20 || (flakyFirstPage && pages.count == 1) ? [] : (0..<20).map { index in
+                let id = (page - 1) * 20 + index
+                return ["id": id, "mid": "id\(id)", "name": "Version \(id)", "singer": [["name": "Singer"]]]
+            }
+            response = try JSONSerialization.data(withJSONObject: ["req_1": ["code": 0, "data": ["body": ["song": ["list": songs]]]]])
+        } else {
+            response = Data("<root><content><![CDATA[[00:01]Hello]]></content></root>".utf8)
+        }
+        return (response, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+    }
+}
+
+@Test func qqFetchesEightyVersionsUsingSupportedPageSize() async throws {
+    let client = QQPageClient()
+    let provider = LyricsProviders.Service.qq.create(httpClient: client)
+    var values: [String] = []
+    for try await value in provider.lyrics(for: .init(searchTerm: .keyword("Song"), duration: 0, limit: 80)) { values.append(value.idTags[.title] ?? "") }
+    #expect(values.count == 80 && Set(values).count == 80)
+    #expect(await client.pages == [1, 2, 3, 4])
+    #expect(await client.sizes.allSatisfy { $0 == 20 })
+}
+
+@Test func qqLaterPageFailureKeepsEarlierVersions() async throws {
+    let client = QQPageClient(failLaterPages: true)
+    let provider = LyricsProviders.Service.qq.create(httpClient: client)
+    var count = 0
+    for try await _ in provider.lyrics(for: .init(searchTerm: .keyword("Song"), duration: 0, limit: 80)) { count += 1 }
+    #expect(count == 20)
+}
+
+private actor FinalVersionGate {
+    private var opened = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    func wait() async {
+        if opened { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+    func release() {
+        opened = true
+        let pending = waiters; waiters = []
+        for waiter in pending { waiter.resume() }
+    }
+}
+
+@Test @MainActor func automaticLyricsAppearEarlyKeepLoadingAndCacheOnlyTheBetterFinalVersion() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let cache = LyricsCache(directory: directory)
+    let track = Track(playerID: "test", playerName: "", title: "Song", artist: "Singer")
+    var plain = try LyricsCodec.parse("[00:01]Hello world", source: "NetEase")
+    plain.title = track.title; plain.artist = track.artist
+    var word = try LyricsCodec.parse("[00:01]Hello world\n[00:01][tt]<0,0><500,6><1000,11><1000>", source: "NetEase")
+    word.title = track.title; word.artist = track.artist
+    let first = plain, final = word
+    let gate = FinalVersionGate()
+    defer { Task { await gate.release() } }
+    let store = LyricsStore(cache: cache, configuration: { var c = SourceConfiguration(); c.enabled = ["NetEase"]; return c },
+                            aliasResolver: TrackAliasResolver { _ in Data(#"{"results":[]}"#.utf8) }, firstResultDelay: .milliseconds(10)) { _, _, _, _ in
+        .init { stream in
+            let task = Task {
+                stream.yield(first)
+                await gate.wait()
+                guard !Task.isCancelled else { stream.finish(); return }
+                stream.yield(final); stream.finish()
+            }
+            stream.onTermination = { _ in task.cancel() }
+        }
+    }
+    let session = LyricsSession(repository: store)
+    session.accept(.init(track: track, position: 1, isPlaying: false))
+    let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+    while session.document == nil, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(2)) }
+    #expect(session.document?.hasWordTiming == false)
+    #expect(session.isSearching && session.phase == .ready)
+    #expect(await cache.load(for: track) == nil)
+    await gate.release()
+    while session.isSearching, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(2)) }
+    #expect(session.document?.hasWordTiming == true)
+    #expect(session.candidates.count == 2)
+    while await cache.load(for: track) == nil, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(2)) }
+    #expect(await cache.load(for: track)?.hasWordTiming == true)
+    session.reload(forceRefresh: true)
+    #expect(session.isSearching)
+    session.use(final, persist: false)
+    #expect(!session.isSearching)
+}
+
+@Test func qqRetriesTransientEmptyFullSearchWhenSmartboxHasEvidence() async throws {
+    let client = QQPageClient(flakyFirstPage: true)
+    let provider = LyricsProviders.Service.qq.create(httpClient: client)
+    var count = 0
+    for try await _ in provider.lyrics(for: .init(searchTerm: .keyword("Song"), duration: 0, limit: 40)) { count += 1 }
+    #expect(count == 40)
+    #expect(await client.pages == [1, 1, 2])
+}

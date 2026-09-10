@@ -50,7 +50,11 @@ struct MainView: View {
                 Text(model.session.isPlaying ? "实时同步" : "已暂停").font(.system(size: 10)).foregroundStyle(.white.opacity(0.4))
             }
             Spacer()
-            if let error = model.playerError ?? model.session.persistenceError {
+            if model.session.isSearching {
+                ProgressView().controlSize(.mini)
+                Text(model.session.document == nil ? "正在加载歌词…" : "正在加载更多版本…")
+                    .font(.system(size: 10)).lineLimit(1).foregroundStyle(.white.opacity(0.6))
+            } else if let error = model.playerError ?? model.session.persistenceError {
                 Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange).help(error)
                 Text(error).font(.system(size: 10)).lineLimit(1).foregroundStyle(.white.opacity(0.6)).frame(maxWidth: 290)
             } else if let doc = model.session.document {

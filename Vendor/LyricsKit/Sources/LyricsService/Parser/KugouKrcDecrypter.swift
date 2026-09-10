@@ -13,7 +13,7 @@ func decryptKugouKrc(_ data: Data) -> String? {
     }
 
     decrypted.removeFirst(2)
-    
+
     guard let unarchivedData = try? (Data(decrypted) as NSData).decompressed(using: .zlib) else {
         return nil
     }

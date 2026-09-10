@@ -45,7 +45,7 @@ func liveRomanizedSongResolvesAndSearchesNativeTitle() async throws {
     var results: [LyricCandidate] = []
     for try await result in store.lyrics(for: romanTrack, forceRefresh: true) { results.append(result) }
     #expect(results.count == 3) // repeated title-only queries are deduplicated
-    let best = try #require(results.first)
+    let best = try #require(results.max(by: { $0.score < $1.score }))
     #expect(best.document.hasTranslation && best.document.hasWordTiming && best.score >= 60)
     #expect(best.document.duration == 160) // an early lyric ending is accepted
 }
@@ -208,7 +208,7 @@ func liveReportedSongsAutomaticallyChooseBilingualWordLyricsWithoutCache() async
         })
         var results: [LyricCandidate] = []
         for try await result in store.lyrics(for: track, forceRefresh: true) { results.append(result) }
-        let best = try #require(results.first)
+        let best = try #require(results.max(by: { $0.score < $1.score }))
         print("LIVE_AUTOMATIC_WINNER query=\(track.title) title=\(best.document.title) source=\(best.document.source) bilingual=\(best.document.hasTranslation) word=\(best.document.hasWordTiming) candidates=\(results.count)")
         #expect(best.document.hasTranslation && best.document.hasWordTiming)
         #expect(best.document.source != "LRCLIB")

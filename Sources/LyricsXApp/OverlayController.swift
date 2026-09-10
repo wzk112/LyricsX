@@ -355,7 +355,9 @@ struct OverlayView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(model.session.track?.title ?? "LyricsX")
                             .font(.system(size: 17, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.8)
-                        if let artist = model.session.track?.artist, !artist.isEmpty {
+                        if model.session.isSearching {
+                            Text("正在加载歌词…").font(.system(size: 12, weight: .medium)).opacity(0.8)
+                        } else if let artist = model.session.track?.artist, !artist.isEmpty {
                             Text(artist).font(.system(size: 12, weight: .medium)).lineLimit(1).opacity(0.8)
                         }
                     }.shadow(color: .black.opacity(0.8), radius: 2, y: 1)

@@ -133,15 +133,20 @@ struct LyricsScrollView: View {
         }
     }
     private var trackTitlePlaceholder: some View {
-        Text(model.session.track?.title ?? "LyricsX")
-            .font(.system(size: 34, weight: .semibold))
-            .foregroundStyle(.white.opacity(0.9))
-            .lineLimit(2)
-            .multilineTextAlignment(.center)
-            .padding(40)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .accessibilityLabel("当前歌曲：\(model.session.track?.title ?? "LyricsX")")
+        VStack(spacing: 18) {
+            Text(model.session.track?.title ?? "LyricsX")
+                .font(.system(size: 34, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.9)).lineLimit(2).multilineTextAlignment(.center)
+                .accessibilityLabel("当前歌曲：\(model.session.track?.title ?? "LyricsX")")
+            if model.session.isSearching {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("正在加载歌词…").font(.system(size: 13)).foregroundStyle(.secondary)
+                }
+            }
+        }.padding(40).frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+
     private func emptyState(symbol: String, title: String, detail: String) -> some View {
         VStack(spacing: 18) {
             Image(systemName: symbol).font(.system(size: 42, weight: .ultraLight)).foregroundStyle(.white.opacity(0.4))

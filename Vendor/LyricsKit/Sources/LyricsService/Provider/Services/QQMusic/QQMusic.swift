@@ -29,12 +29,22 @@ extension LyricsProviders.QQMusic: _LyricsProvider {
     static let service: String = "QQMusic"
 
     func search(for request: LyricsSearchRequest) async throws -> [LyricsToken] {
-        let endpoints = await withTaskGroup(of: (Int, Result<[LyricsToken], Error>).self) { group in
+        var endpoints = await withTaskGroup(of: (Int, Result<[LyricsToken], Error>).self) { group in
             group.addTask { do { return (0, .success(try await self.searchApi1(for: request))) } catch { return (0, .failure(error)) } }
             group.addTask { do { return (1, .success(try await self.searchApi2(for: request))) } catch { return (1, .failure(error)) } }
             var values: [(Int, Result<[LyricsToken], Error>)] = []
             for await value in group { values.append(value) }
             return values.sorted { $0.0 < $1.0 }.map { $0.1 }
+        }
+        if endpoints.count == 2,
+           case .success(let hints) = endpoints[0], !hints.isEmpty,
+           case .success(let details) = endpoints[1], details.isEmpty {
+            // An existing smartbox hit is evidence that an empty full search
+            // may be transient. Retry once, rather than amplifying every
+            // legitimate zero-result query into repeated requests.
+            try await Task.sleep(nanoseconds: 350_000_000)
+            do { endpoints[1] = .success(try await searchApi2(for: request)) }
+            catch { endpoints[1] = .failure(error) }
         }
         var seen = Set<String>(), combined: [LyricsToken] = []
         var failure: Error?
@@ -60,9 +70,29 @@ extension LyricsProviders.QQMusic: _LyricsProvider {
     }
 
     private func searchApi2(for request: LyricsSearchRequest) async throws -> [LyricsToken] {
+        // This endpoint silently returns an empty list for oversized pages.
+        // Grow the result set using its supported 20-record pagination.
+        var values: [LyricsToken] = []
+        var seen = Set<String>()
+        for page in 1...max(1, (request.limit + 19) / 20) {
+            try Task.checkCancellation()
+            do {
+                let batch = try await searchPage(for: request, page: page)
+                let added = batch.filter { seen.insert($0.value.id).inserted }
+                values += added
+                if batch.count < 20 || added.isEmpty { break }
+            } catch {
+                if values.isEmpty { throw error }
+                break // a later page cannot erase earlier successful pages
+            }
+        }
+        return values
+    }
+
+    private func searchPage(for request: LyricsSearchRequest, page: Int) async throws -> [LyricsToken] {
         let requestBody: [String: Any] = ["req_1": [
             "method": "DoSearchForQQMusicDesktop", "module": "music.search.SearchCgiService",
-            "param": ["num_per_page": min(100, request.limit), "page_num": 1,
+            "param": ["num_per_page": 20, "page_num": page,
                       "query": request.searchTerm.description, "search_type": 0]]]
         let endpoint = Endpoint(host: Self.searchHost2, path: Self.searchPath2, method: .post,
                                 headers: ["Content-Type": "application/json"],
