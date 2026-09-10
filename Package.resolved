@@ -1,0 +1,103 @@
+{
+  "originHash" : "0827755241ff3c30d24340bf32851bb8a3108e617cf454c7d667e714e7de8335",
+  "pins" : [
+    {
+      "identity" : "bigint",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/attaswift/BigInt",
+      "state" : {
+        "revision" : "e07e00fa1fd435143a2dcf8b7eec9a7710b2fdfe",
+        "version" : "5.7.0"
+      }
+    },
+    {
+      "identity" : "cryptoswift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/krzyzanowskim/CryptoSwift",
+      "state" : {
+        "revision" : "f2a627b84c1ff96f21ac2fcb623ab36142dd5512",
+        "version" : "1.10.0"
+      }
+    },
+    {
+      "identity" : "frameworktoolbox",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/Mx-Iris/FrameworkToolbox",
+      "state" : {
+        "revision" : "9fa37fa0f6eb6c3eb22fa92aca55045b6508c6dc",
+        "version" : "0.12.0"
+      }
+    },
+    {
+      "identity" : "lyricskit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/MxIris-LyricsX-Project/LyricsKit",
+      "state" : {
+        "revision" : "bb255842eb8fe48880e15c23c0a7704599dd3504"
+      }
+    },
+    {
+      "identity" : "mediaremote-adapter",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/MxIris-LyricsX-Project/mediaremote-adapter",
+      "state" : {
+        "revision" : "0fa7db9dea7cdb72bbb4090eaccf2355d8e4279e"
+      }
+    },
+    {
+      "identity" : "opensoftlinking",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/MxIris-Reverse-Engineering/OpenSoftLinking",
+      "state" : {
+        "revision" : "bdc30a77b63b4209acdb4fe777b57a9c83cabc7a",
+        "version" : "0.1.0"
+      }
+    },
+    {
+      "identity" : "regex",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/ddddxxx/Regex",
+      "state" : {
+        "revision" : "c0ad0a7e9a48989d9688c2b524a1e69b6293b733",
+        "version" : "1.0.1"
+      }
+    },
+    {
+      "identity" : "swift-async-algorithms",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-async-algorithms",
+      "state" : {
+        "revision" : "3da39bbc4e687d4192af7c9cf4eab805745a0b9c",
+        "version" : "1.1.5"
+      }
+    },
+    {
+      "identity" : "swift-collections",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-collections.git",
+      "state" : {
+        "revision" : "a0cb0954ecb21e4e31b0070e6ed5674e8556685a",
+        "version" : "1.6.0"
+      }
+    },
+    {
+      "identity" : "swift-syntax",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/swiftlang/swift-syntax.git",
+      "state" : {
+        "revision" : "79e4b74a295b6eb74a8b585e3a39d29e70c1dbd1",
+        "version" : "603.0.2"
+      }
+    },
+    {
+      "identity" : "swiftcf",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/MxIris-Library-Forks/SwiftCF",
+      "state" : {
+        "revision" : "46f9d814b5197d33286235036d2e3c982e885fad",
+        "version" : "0.2.2"
+      }
+    }
+  ],
+  "version" : 3
+}

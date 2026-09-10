@@ -1,0 +1,288 @@
+import Foundation
+import AppKit
+import LyricsXCore
+@preconcurrency import MediaRemoteAdapter
+
+public enum PlayerMode: String, CaseIterable, Sendable, Identifiable {
+    case automatic, appleMusic, spotify
+    public var id: String { rawValue }
+    public var title: String {
+        switch self { case .automatic: "自动 · 系统正在播放"; case .appleMusic: "Apple Music"; case .spotify: "Spotify" }
+    }
+    var bundleID: String? { switch self { case .automatic: nil; case .appleMusic: "com.apple.Music"; case .spotify: "com.spotify.client" } }
+}
+public enum PlayerCommand: Sendable, Equatable { case toggle, next, previous, seek(Double) }
+
+public struct SystemMediaPayload: Decodable, Sendable {
+    public var title: String?
+    public var artist: String?
+    public var album: String?
+    public var isPlaying: Bool?
+    public var durationMicros: Double?
+    public var elapsedTimeMicros: Double?
+    public var applicationName: String?
+    public var bundleIdentifier: String?
+    public var parentApplicationBundleIdentifier: String?
+    public var processIdentifier: Int32?
+    public var artworkDataBase64: String?
+    public var timestampEpochMicros: Double?
+
+    public func snapshot(now: Double, wallTime: Double = Date().timeIntervalSince1970, isIOSApp: Bool = false) -> PlaybackSnapshot {
+        guard var title, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return PlaybackSnapshot(track: nil, position: 0, isPlaying: false, sampledAt: now)
+        }
+        var artist = artist ?? ""
+        if isIOSApp {
+            // Restrict ticker recovery to iOS-on-Mac; legitimate native song titles may contain an em dash.
+            for text in [title, artist] {
+                if let range = text.range(of: " — ") {
+                    title = String(text[..<range.lowerBound]); artist = String(text[range.upperBound...]); break
+                }
+            }
+        }
+        let playerID = parentApplicationBundleIdentifier ?? bundleIdentifier ?? "system"
+        let duration = (durationMicros ?? 0) / 1_000_000
+        // Metadata identity is stable even if a source rotates its numeric ID with every lyric.
+        let track = Track(playerID: playerID, playerName: applicationName ?? "正在播放", title: title, artist: artist, album: album ?? "",
+                          duration: duration, artworkData: artworkDataBase64.flatMap { Data(base64Encoded: $0) })
+        var position = max(0, (elapsedTimeMicros ?? 0) / 1_000_000)
+        if isPlaying == true, let timestampEpochMicros {
+            let anchorAge = max(0, wallTime - timestampEpochMicros / 1_000_000)
+            // MediaRemote returns a position anchored at its timestamp. The
+            // timestamp can legitimately be much older than three seconds.
+            // Clamp only to the track boundary, not to an arbitrary age.
+            position += duration > 0 ? min(anchorAge, max(0, duration - position)) : anchorAge
+        }
+        return PlaybackSnapshot(
+            track: track,
+            position: position,
+            isPlaying: isPlaying == true,
+            sampledAt: now,
+            positionIsReliable: elapsedTimeMicros != nil,
+            playbackStateIsReliable: isPlaying != nil
+        )
+    }
+}
+
+@MainActor
+public final class PlayerBridge {
+    public var onSnapshot: ((PlaybackSnapshot) -> Void)?
+    public var onError: ((String?) -> Void)?
+    public var onCommandResult: ((PlayerCommand, Bool) -> Void)?
+    public var mode: PlayerMode = .automatic { didSet { restart() } }
+    private var loop: Task<Void, Never>?
+    private var pollTask: Task<Void, Never>?
+    private var revision: UInt64 = 0
+    private var commandTask: Task<Void, Never>?
+    private var commandQueue: [PlayerCommand] = []
+    private var observers: [NSObjectProtocol] = []
+    private var latestScriptID = ""
+    private var scriptTarget: String?
+    public init() {}
+    public func start() {
+        guard loop == nil else { return }
+        for name in ["com.apple.iTunes.playerInfo", "com.spotify.client.PlaybackStateChanged"] {
+            observers.append(DistributedNotificationCenter.default().addObserver(forName: Notification.Name(name), object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.refresh() }
+            })
+        }
+        loop = Task { [weak self] in
+            while !Task.isCancelled {
+                self?.refresh()
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+            }
+        }
+    }
+    public func stop() {
+        revision &+= 1; loop?.cancel(); loop = nil; pollTask?.cancel(); pollTask = nil
+        commandTask?.cancel(); commandTask = nil; commandQueue.removeAll()
+        for token in observers { DistributedNotificationCenter.default().removeObserver(token) }; observers = []
+    }
+    public func restart() { stop(); latestScriptID = ""; start() }
+    public func refresh() {
+        guard pollTask == nil, commandTask == nil else { return }
+        let generation = revision
+        pollTask = Task { [weak self] in
+            guard let self else { return }
+            defer { if self.revision == generation { self.pollTask = nil } }
+            do {
+                let snapshot = try await self.readSnapshot()
+                guard !Task.isCancelled, self.revision == generation else { return }
+                self.onError?(nil); self.onSnapshot?(snapshot)
+            } catch {
+                guard !Task.isCancelled, self.revision == generation else { return }
+                self.onError?(error.localizedDescription)
+            }
+        }
+    }
+    public func send(_ command: PlayerCommand) {
+        if case .seek = command {
+            commandQueue.removeAll { if case .seek = $0 { true } else { false } }
+        }
+        commandQueue.append(command)
+        drainCommandsIfNeeded()
+    }
+    public func writeLyrics(_ lyrics: String, to track: Track) async throws {
+        guard track.playerID == "com.apple.Music" else { throw BridgeError.wrongTrack }
+        let source = """
+        function run(argv) {
+          const app = Application('com.apple.Music');
+          if (!app.running()) throw new Error('Player unavailable');
+          const t = app.currentTrack();
+          if (t.name() !== argv[0] || t.artist() !== argv[1] || t.album() !== argv[2]) throw new Error('Track changed');
+          if (argv[3] && String(t.persistentID()) !== argv[3]) throw new Error('Track changed');
+          t.lyrics = argv[4];
+        }
+        """
+        let result = try await ProcessRunner.run("/usr/bin/osascript", arguments: ["-l", "JavaScript", "-e", source, track.title, track.artist, track.album, track.persistentID, lyrics])
+        guard result.status == 0 else { throw BridgeError.lyricsWrite }
+    }
+    private func drainCommandsIfNeeded() {
+        guard commandTask == nil, !commandQueue.isEmpty else { return }
+        revision &+= 1
+        pollTask?.cancel()
+        pollTask = nil
+        commandTask = Task { [weak self] in
+            guard let self else { return }
+            let generation = self.revision
+            while !self.commandQueue.isEmpty, !Task.isCancelled {
+                let command = self.commandQueue.removeFirst()
+                do {
+                    try await self.execute(command)
+                    guard self.revision == generation, !Task.isCancelled else { return }
+                    self.onCommandResult?(command, true)
+                } catch {
+                    guard self.revision == generation, !Task.isCancelled else { return }
+                    self.onError?(error.localizedDescription)
+                    self.onCommandResult?(command, false)
+                }
+            }
+            guard self.revision == generation, !Task.isCancelled else { return }
+            self.commandTask = nil
+            self.refresh()
+        }
+    }
+    private func execute(_ command: PlayerCommand) async throws {
+        if let target = mode.bundleID ?? scriptTarget {
+            let operation: String
+            switch command {
+            case .toggle: operation = "app.playpause()"
+            case .next: operation = "app.nextTrack()"
+            case .previous: operation = "app.previousTrack()"
+            case .seek(let time): operation = "app.playerPosition = \(max(0, time.isFinite ? time : 0))"
+            }
+            let result = try await ProcessRunner.run("/usr/bin/osascript", arguments: ["-l", "JavaScript", "-e", "const app = Application('\(target)'); if (app.running()) { \(operation); }"])
+            guard result.status == 0 else { throw BridgeError.automation }
+        } else {
+            let args: [String]
+            switch command {
+            case .toggle: args = ["toggle_play_pause"]
+            case .next: args = ["next_track"]
+            case .previous: args = ["previous_track"]
+            case .seek(let time): args = ["set_time", String(max(0, time.isFinite ? time : 0))]
+            }
+            let result = try await runMedia(args)
+            guard result.status == 0 else { throw BridgeError.unavailable }
+        }
+    }
+    private func readSnapshot() async throws -> PlaybackSnapshot {
+        if let target = mode.bundleID { scriptTarget = target; return try await readScript(target) }
+        let previousScriptTarget = scriptTarget
+        scriptTarget = nil
+        do {
+            let result = try await runMedia(["update_player_state"])
+            guard result.status == 0 else { throw BridgeError.unavailable }
+            struct Envelope: Decodable { var notificationName: String; var payload: SystemMediaPayload }
+            for line in String(decoding: result.data, as: UTF8.self).split(separator: "\n").reversed() {
+                guard let item = try? JSONDecoder().decode(Envelope.self, from: Data(line.utf8)), item.notificationName.contains("NowPlayingInfoDidChange") else { continue }
+                let running = item.payload.processIdentifier.flatMap { NSRunningApplication(processIdentifier: $0) }
+                let isIOS = MediaController.isiOSAppOnMac(runningApp: running)
+                return item.payload.snapshot(now: ProcessInfo.processInfo.systemUptime, isIOSApp: isIOS)
+            }
+            throw BridgeError.unavailable
+        } catch {
+            // Public Apple Events remain usable if the system adapter changes on a macOS update.
+            let runningIDs = ["com.apple.Music", "com.spotify.client"].filter {
+                !NSRunningApplication.runningApplications(withBundleIdentifier: $0).isEmpty
+            }
+            var snapshots: [(id: String, value: PlaybackSnapshot)] = []
+            for id in runningIDs {
+                if let value = try? await readScript(id), value.track != nil {
+                    snapshots.append((id, value))
+                }
+            }
+            if let active = snapshots.first(where: { $0.value.isPlaying }) {
+                scriptTarget = active.id
+                return active.value
+            }
+            if let previous = snapshots.first(where: { $0.id == previousScriptTarget }) {
+                scriptTarget = previous.id
+                return previous.value
+            }
+            if let first = snapshots.first {
+                scriptTarget = first.id
+                return first.value
+            }
+            throw error
+        }
+    }
+    private func runMedia(_ command: [String]) async throws -> ProcessRunner.Output {
+        guard let script = Bundle.main.url(forResource: "run", withExtension: "pl") else { throw BridgeError.bundle }
+        let library = Bundle.main.bundleURL.appendingPathComponent("Contents/Frameworks/libMediaRemoteAdapter.dylib")
+        guard FileManager.default.fileExists(atPath: library.path) else { throw BridgeError.bundle }
+        return try await ProcessRunner.run("/usr/bin/perl", arguments: [script.path, library.path] + command)
+    }
+    private struct ScriptRecord: Decodable {
+        var title: String?; var artist: String?; var album: String?; var id: String?; var duration: Double?
+        var position: Double?; var playing: Bool?; var artwork: String?; var lyrics: String?; var location: String?
+    }
+    private func readScript(_ target: String) async throws -> PlaybackSnapshot {
+        guard !NSRunningApplication.runningApplications(withBundleIdentifier: target).isEmpty else {
+            return PlaybackSnapshot(track: nil, position: 0, isPlaying: false)
+        }
+        let spotify = target == "com.spotify.client"
+        let source = """
+        function run(argv) {
+          const app = Application('\(target)');
+          function safe(f, d) { try { const v = f(); return v == null ? d : v; } catch(e) { return d; } }
+          if (!app.running()) return '{}';
+          const t = app.currentTrack();
+          const id = String(safe(() => t.\(spotify ? "id" : "persistentID")(), ''));
+          return JSON.stringify({title:safe(() => t.name(), ''),artist:safe(() => t.artist(), ''),album:safe(() => t.album(), ''),id:id,
+            duration:safe(() => t.duration(),0)/\(spotify ? "1000" : "1"),position:safe(() => app.playerPosition(),0),playing:safe(() => app.playerState(),'')==='playing',
+            artwork:\(spotify ? "safe(() => t.artworkUrl(), '')" : "''"),lyrics:\(spotify ? "''" : "id !== argv[0] ? safe(() => t.lyrics(), '') : null"),location:\(spotify ? "''" : "safe(() => t.location().toString(), '')")});
+        }
+        """
+        let started = ProcessInfo.processInfo.systemUptime
+        let output = try await ProcessRunner.run("/usr/bin/osascript", arguments: ["-l", "JavaScript", "-e", source, latestScriptID])
+        guard output.status == 0 else { throw BridgeError.automation }
+        let item = try JSONDecoder().decode(ScriptRecord.self, from: output.data)
+        guard let title = item.title, !title.isEmpty else { return PlaybackSnapshot(track: nil, position: 0, isPlaying: false) }
+        latestScriptID = item.id ?? ""
+        let track = Track(playerID: target, playerName: spotify ? "Spotify" : "Apple Music", persistentID: item.id ?? "", title: title,
+                          artist: item.artist ?? "", album: item.album ?? "", duration: item.duration ?? 0,
+                          artworkURL: item.artwork.flatMap(URL.init(string:)), localFileURL: item.location.flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }, embeddedLyrics: item.lyrics)
+        let finished = ProcessInfo.processInfo.systemUptime
+        let sampleTime = (started + finished) / 2
+        return PlaybackSnapshot(
+            track: track,
+            position: item.position ?? 0,
+            isPlaying: item.playing ?? false,
+            sampledAt: sampleTime,
+            positionIsReliable: item.position != nil,
+            playbackStateIsReliable: item.playing != nil
+        )
+    }
+    enum BridgeError: LocalizedError {
+        case unavailable, automation, bundle, wrongTrack, lyricsWrite
+        var errorDescription: String? {
+            switch self {
+            case .unavailable: "暂时无法读取系统播放状态。可在设置中切换到 Apple Music 或 Spotify。"
+            case .automation: "请在系统设置 → 隐私与安全性 → 自动化中允许 LyricsX 控制播放器。"
+            case .bundle: "播放器组件未就绪，请使用打包后的 LyricsX.app。"
+            case .wrongTrack: "只有当前 Apple Music 歌曲支持写入歌词。"
+            case .lyricsWrite: "歌词未能写入。请确认歌曲未切换、已加入音乐资料库，并已允许自动化控制。"
+            }
+        }
+    }
+}

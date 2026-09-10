@@ -6,3 +6,7 @@ xcuserdata
 .claude
 .omc
 swift-syntax/.swiftpm
+.build/
+.swiftpm/
+*.xcuserstate
+*.app/
