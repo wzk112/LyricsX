@@ -66,12 +66,12 @@ public actor LyricsCache {
         let scoped = directory.startAccessingSecurityScopedResource()
         defer { if scoped { directory.stopAccessingSecurityScopedResource() } }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        // LRC is the interoperable default for every newly saved lyric. Existing
-        // .lrc/.lrcx files are still read and updated in place when loaded.
-        let ext = document.isSynced || document.isInstrumental ? "lrc" : "txt"
-        // An existing .lrc remains the same file when adjusting its offset.
-        // A manual/forced search may save before this process has loaded the
-        // old file. Resolve it on disk too, so an existing .lrc isn't duplicated.
+        // LRCX remains the default so word-level timing and provider attachments
+        // survive every cache write. Existing LRC files remain interoperable and
+        // are updated in place when explicitly loaded.
+        let ext = document.isSynced || document.isInstrumental ? "lrcx" : "txt"
+        // A manual/forced search may save before this process has loaded the old
+        // file. Resolve it on disk too, so a user-managed cache is not duplicated.
         let existing = loadedPaths[track.cacheIdentity] ?? existingURL(for: track)
         let url = existing ?? directory.appendingPathComponent(Self.filename(for: track)).appendingPathExtension(ext)
         var doc = document

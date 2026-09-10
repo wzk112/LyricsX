@@ -29,7 +29,8 @@ public struct SystemMediaPayload: Decodable, Sendable {
 
     public func snapshot(now: Double, wallTime: Double = Date().timeIntervalSince1970, isIOSApp: Bool = false) -> PlaybackSnapshot {
         guard var title, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return PlaybackSnapshot(track: nil, position: 0, isPlaying: false, sampledAt: now)
+            return PlaybackSnapshot(track: nil, position: 0, isPlaying: false, sampledAt: now,
+                                    positionIsReliable: false, playbackStateIsReliable: false)
         }
         var artist = artist ?? ""
         if isIOSApp {
@@ -269,7 +270,10 @@ public final class PlayerBridge {
         let output = try await ProcessRunner.run("/usr/bin/osascript", arguments: ["-l", "JavaScript", "-e", source, latestScriptID])
         guard output.status == 0 else { throw BridgeError.automation }
         let item = try JSONDecoder().decode(ScriptRecord.self, from: output.data)
-        guard let title = item.title, !title.isEmpty else { return PlaybackSnapshot(track: nil, position: 0, isPlaying: false) }
+        guard let title = item.title, !title.isEmpty else {
+            return PlaybackSnapshot(track: nil, position: 0, isPlaying: false,
+                                    positionIsReliable: false, playbackStateIsReliable: false)
+        }
         let persistentID = (item.id?.isEmpty == false ? item.id! : [title, item.artist ?? "", item.album ?? ""].joined(separator: "\u{1f}"))
         latestScriptID = persistentID
         if !spotify, artworkCacheID != persistentID {

@@ -72,12 +72,12 @@ import LyricsXCore
     #expect(results.count == 1); #expect(results.first?.score == 1000)
     #expect(results.first?.document.lines.first?.text == "Cached")
 }
-@Test func newSavesUsePortableLRCExtension() async throws {
+@Test func newSavesUseLRCXExtension() async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
     let track = Track(playerID: "test", playerName: "", title: "New", artist: "Artist")
     try await LyricsCache(directory: directory).save(LyricsCodec.parse("[00:01]New lyric"), for: track)
-    #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path) == ["New - Artist.lrc"])
+    #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path) == ["New - Artist.lrcx"])
 }
 @Test func unreadableCacheDoesNotBlockNewSearch() async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -115,6 +115,15 @@ import LyricsXCore
 @Test func processSeparatesOutputAndHandlesSpaces() async throws {
     let result = try await ProcessRunner.run("/usr/bin/printf", arguments: ["%s", "hello space"])
     #expect(String(decoding: result.data, as: UTF8.self) == "hello space")
+}
+@Test func invalidAndOptionalQQArtworkRequestsNeverReachURLSession() async {
+    let client = SecureLyricsHTTPClient(session: URLSession(configuration: .ephemeral))
+    var invalid = URLRequest(url: URL(string: "https://example.invalid")!)
+    invalid.url = nil
+    await #expect(throws: URLError.self) { try await client.data(for: invalid) }
+    var request = URLRequest(url: URL(string: "https://u.y.qq.com/cgi-bin/musicu.fcg")!)
+    request.httpBody = Data(#"{"module":"music.pf_song_detail_svr"}"#.utf8)
+    await #expect(throws: URLError.self) { try await client.data(for: request) }
 }
 @Test func systemPayloadHandlesMicrosAndIgnoresArtworkInIdentity() throws {
     let json = #"{"title":"Song","artist":"Artist","album":"Album","isPlaying":true,"durationMicros":180000000,"elapsedTimeMicros":10000000,"timestampEpochMicros":1000000000,"bundleIdentifier":"test"}"#

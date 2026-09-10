@@ -16,11 +16,11 @@
 - 悬浮窗位置、大小、字号、透明度、翻译和下一句显示方式会被保存。
 - Apple Music 风格的歌词切换、模糊淡入淡出、逐字高亮和响应式布局。
 - 菜单栏播放控制、歌词偏移、搜索、重新搜索、Finder 定位、错误歌词停用、资料库和 Apple Music 写入。
-- 继续读取已有 `.lrcx`、`.lrc` 和纯文本缓存；联网搜索结果默认保存为通用 `.lrc`。
+- 联网搜索结果默认保存为 `.lrcx`，保留逐字时间和来源附加信息；仍可导入、读取 `.lrc` 和纯文本歌词。
 
 ## 安装
 
-从 [Releases](https://github.com/wzk112/LyricsX/releases) 下载 `LyricsX-2.0.0.zip`，解压后将 `LyricsX.app` 拖到 `/Applications`。
+从 [Releases](https://github.com/wzk112/LyricsX/releases) 下载最新的 `LyricsX-2.0.1.zip`，解压后将 `LyricsX.app` 拖到 `/Applications`。
 
 本次包使用本机 ad-hoc 签名，没有 Developer ID 公证票据。首次打开时如果 macOS 提示无法验证开发者：
 
@@ -32,7 +32,7 @@
    xattr -dr com.apple.quarantine /Applications/LyricsX.app
    ```
 
-完整的安装、签名和缓存迁移说明见 [`docs/releases/v2.0.0.md`](docs/releases/v2.0.0.md)。
+完整的安装、签名和版本说明见 [`docs/releases/v2.0.1.md`](docs/releases/v2.0.1.md)。
 
 ## 播放器权限
 
@@ -42,11 +42,11 @@
 
 ## 缓存和歌词格式
 
-默认缓存目录是 `~/Music/LyricsX`，可以在“设置”中选择已有目录。应用会优先读取磁盘中的现有 `.lrc`、`.lrcx` 文件，选择另一份搜索结果后会更新原文件，不产生重复缓存。
+默认缓存目录是 `~/Music/LyricsX`，可以在“设置”中选择已有目录。应用会优先读取磁盘中的现有 `.lrcx`、`.lrc` 文件，选择另一份搜索结果后会更新原文件，不产生重复缓存。
 
-本次迁移已将原缓存中的 918 个 `.lrcx` 转换为标准 `.lrc`，原文件保存在缓存目录同级的日期备份目录中（例如 `~/Music/LyricsX-lrcx-backup-YYYY-MM-DD`）。
+2.0.1 起，新缓存恢复使用 `.lrcx`。它会保留逐字时间、翻译、偏移和来源附加信息；普通 `.lrc` 继续支持导入和读取。
 
-标准 LRC 保留行级时间戳、原文、翻译和偏移；LRCX 特有的逐字 `tt` 标记不写入 LRC。已有 LRCX 仍可读取和显示逐字动画。
+如需重新获取所有歌词，可关闭应用后删除 `~/Music/LyricsX` 中的缓存文件，再启动 LyricsX 搜索或播放歌曲。
 
 ## 从源码构建
 
@@ -60,21 +60,12 @@ open build/LyricsX.app
 
 `scripts/build.sh release` 会构建 App、复制 MediaRemote 组件、生成图标、使用 ad-hoc 签名并执行严格签名校验。默认签名身份为 `-`；正式公开分发应在本机配置 Developer ID、Hardened Runtime 和 notarization。
 
-将旧 LRCX 缓存转换为 LRC：
-
-```sh
-swift run LyricsXConverter ~/Music/LyricsX
-```
-
-转换器会先验证输出、保留备份，只有写入成功后才移除原 `.lrcx`。
-
 ## 项目结构
 
 ```text
 Sources/LyricsXCore       播放快照、歌词模型、时间轴和身份校验
 Sources/LyricsXServices   播放器桥接、歌词搜索、缓存和编码
 Sources/LyricsXApp        SwiftUI 主窗口、设置、菜单栏和悬浮窗
-Sources/LyricsXConverter  LRCX 到标准 LRC 的安全转换器
 Tests/                    时间轴、缓存、来源优先级、播放器和窗口回归测试
 Legacy/LyricsX            原 LyricsX 项目
 Legacy/LyricsXPackage     原 LyricsXPackage 项目
@@ -82,7 +73,7 @@ Legacy/LyricsXPackage     原 LyricsXPackage 项目
 
 ## 验证
 
-当前版本通过 66 项 Swift 回归测试，覆盖播放进度、跳转、切歌、歌词搜索、来源排序、双语优先、缓存替换、LRC 转换、封面 data URL、Apple Music 纯文本内嵌歌词、悬浮窗拖动和点击穿透。
+当前版本通过 69 项 Swift 回归测试，覆盖播放进度、跳转、切歌、自动搜索的时长回退、来源排序、双语优先、LRCX 缓存、网络请求保护、封面 data URL、Apple Music 纯文本内嵌歌词、悬浮窗拖动和点击穿透。
 
 详细修复记录见 [`docs/modernization/REGRESSION_FIXES_2026-09-11.md`](docs/modernization/REGRESSION_FIXES_2026-09-11.md)。
 

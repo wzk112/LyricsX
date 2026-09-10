@@ -39,6 +39,16 @@ private func version(_ source: String, translation: String? = nil) -> LyricsDocu
     #expect(config.selectionScore(version("LRCLIB", translation: "你好"), for: rankingTrack) < 999)
 }
 
+@Test func exactMetadataCanFallbackWhenProviderDurationIsStale() {
+    let config = SourceConfiguration()
+    var staleDuration = version("NetEase", translation: "你好")
+    staleDuration.duration = 999
+    #expect(config.selectionScore(staleDuration, for: rankingTrack) == 0)
+    #expect(config.fallbackSelectionScore(staleDuration, for: rankingTrack) != nil)
+    staleDuration.artist = "Someone Else"
+    #expect(config.fallbackSelectionScore(staleDuration, for: rankingTrack) == nil)
+}
+
 @Test func blankAndDuplicateTranslationsDoNotCountAsBilingual() {
     #expect(!version("NetEase", translation: " \n ").hasTranslation)
     #expect(!version("NetEase", translation: "Hello").hasTranslation)

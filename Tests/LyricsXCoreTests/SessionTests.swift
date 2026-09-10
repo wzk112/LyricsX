@@ -124,6 +124,17 @@ private final class ControlledRepository: LyricsRepository, @unchecked Sendable 
         session.accept(snapshot(nil, playing: false))
         #expect(session.document == nil); #expect(session.currentLineIndex == nil); #expect(session.phase == .idle)
     }
+    @Test func unreliableEmptySnapshotDoesNotClearTrackDuringSeek() {
+        let repo = ControlledRepository(); let session = LyricsSession(repository: repo)
+        let now = ProcessInfo.processInfo.systemUptime
+        session.accept(.init(track: first, position: 12, isPlaying: true, sampledAt: now), now: now, shouldSearch: false)
+        session.seek(to: 30, now: now + 1)
+        session.accept(.init(track: nil, position: 0, isPlaying: false, sampledAt: now + 1.1,
+                             positionIsReliable: false, playbackStateIsReliable: false), now: now + 1.1)
+        #expect(session.track == first)
+        #expect(session.position >= 30 && session.position < 31)
+        session.stop()
+    }
     @Test func seekCannotBeUndoneByOneOldPoll() {
         let repo = ControlledRepository(); let session = LyricsSession(repository: repo)
         let now = ProcessInfo.processInfo.systemUptime

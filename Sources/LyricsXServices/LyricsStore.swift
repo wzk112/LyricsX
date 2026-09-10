@@ -28,6 +28,24 @@ public struct SourceConfiguration: Sendable {
         return 60 + (exactTitle ? 400 : 0) + (document.isSynced ? 200 : 0)
             + (preferBilingual && document.hasTranslation ? 100 : 0) + sourceBonus + match / 100
     }
+
+    /// Providers occasionally publish a stale duration for an otherwise exact
+    /// title/artist match. This is only a fallback after every strict candidate
+    /// has failed; it prevents automatic search from showing an empty state while
+    /// preserving strict candidates as the normal path.
+    public func fallbackSelectionScore(_ document: LyricsDocument, for track: Track) -> Double? {
+        guard document.isSynced else { return nil }
+        let title = CandidateRanker.normalized(track.title)
+        let candidateTitle = CandidateRanker.normalized(document.title)
+        let artist = CandidateRanker.normalized(track.artist)
+        let candidateArtist = CandidateRanker.normalized(document.artist)
+        guard !title.isEmpty, title == candidateTitle,
+              artist.isEmpty || (!candidateArtist.isEmpty && (artist == candidateArtist || artist.contains(candidateArtist) || candidateArtist.contains(artist)))
+        else { return nil }
+        let order = Self.normalizedOrder(sourceOrder)
+        let sourceBonus = order.firstIndex(of: document.source).map { Double(order.count - $0) } ?? 0
+        return 50 + sourceBonus
+    }
 }
 
 public final class LyricsStore: LyricsRepository, Sendable {
@@ -54,10 +72,20 @@ public final class LyricsStore: LyricsRepository, Sendable {
                 }
                 do {
                     let results = search(track: track)
+                    let config = configuration()
+                    var hasStrictCandidate = false
+                    var fallback: LyricCandidate?
                     for try await candidate in results {
                         try Task.checkCancellation()
-                        if candidate.score >= 60 { continuation.yield(candidate) }
+                        if candidate.score >= 60 {
+                            hasStrictCandidate = true
+                            continuation.yield(candidate)
+                        } else if let score = config.fallbackSelectionScore(candidate.document, for: track),
+                                  fallback == nil || score > fallback!.score {
+                            fallback = LyricCandidate(document: candidate.document, score: score)
+                        }
                     }
+                    if !hasStrictCandidate, let fallback { continuation.yield(fallback) }
                     continuation.finish()
                 } catch { continuation.finish(throwing: error) }
             }
@@ -148,12 +176,32 @@ struct SecureLyricsHTTPClient: HTTPClient {
     let session: URLSession
     func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         var request = request
-        if let original = request.url, original.scheme == "http", var components = URLComponents(url: original, resolvingAgainstBaseURL: false) {
+        guard let original = request.url,
+              let scheme = original.scheme?.lowercased(), ["http", "https"].contains(scheme),
+              let host = original.host, !host.isEmpty else { throw URLError(.badURL) }
+        // QQ Music makes this optional request only to decorate a lyric result
+        // with its own album art. Playback artwork is owned by the active player
+        // (for example Apple Music), so avoid an unrelated request on macOS 27.
+        if host == "u.y.qq.com", let body = request.httpBody,
+           String(decoding: body, as: UTF8.self).contains("music.pf_song_detail_svr") {
+            throw URLError(.resourceUnavailable)
+        }
+        if scheme == "http", var components = URLComponents(url: original, resolvingAgainstBaseURL: false) {
             components.scheme = "https"; request.url = components.url
         }
         request.setValue("LyricsX/2.0 (https://github.com/MxIris-LyricsX-Project/LyricsX)", forHTTPHeaderField: "X-Client")
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse, data.count < 8_000_000 else { throw URLError(.badServerResponse) }
-        return (data, http)
+        // macOS 27.0 can abort the process from URLSession.data(for:) while QQ
+        // Music performs its optional cover request. The data-task API keeps the
+        // same timeout and cancellation behavior without that async bridge.
+        return try await withCheckedThrowingContinuation { continuation in
+            let task = session.dataTask(with: request) { data, response, error in
+                if let error { continuation.resume(throwing: error); return }
+                guard let data, data.count < 8_000_000, let response = response as? HTTPURLResponse else {
+                    continuation.resume(throwing: URLError(.badServerResponse)); return
+                }
+                continuation.resume(returning: (data, response))
+            }
+            task.resume()
+        }
     }
 }

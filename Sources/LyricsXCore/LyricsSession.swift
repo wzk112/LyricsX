@@ -26,6 +26,14 @@ public final class LyricsSession {
         self.repository = repository; self.searchTimeout = searchTimeout
     }
     public func accept(_ snapshot: PlaybackSnapshot, now: Double = ProcessInfo.processInfo.systemUptime, shouldSearch: Bool = true) {
+        // A selected player can briefly return no metadata while it commits a
+        // seek. Treat an explicitly unreliable empty snapshot as a transport
+        // gap, not as a song change that clears the whole presentation.
+        if snapshot.track == nil, track != nil,
+           !snapshot.positionIsReliable, !snapshot.playbackStateIsReliable {
+            tick(now: now)
+            return
+        }
         let changed = track?.id != snapshot.track?.id
         if track != snapshot.track { track = snapshot.track }
         if changed {

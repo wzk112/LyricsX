@@ -19,7 +19,6 @@ let package = Package(
             .product(name: "MediaRemoteAdapter", package: "mediaremote-adapter"),
         ]),
         .executableTarget(name: "LyricsXApp", dependencies: ["LyricsXCore", "LyricsXServices"]),
-        .executableTarget(name: "LyricsXConverter", dependencies: ["LyricsXCore", "LyricsXServices"]),
         .testTarget(name: "LyricsXCoreTests", dependencies: ["LyricsXCore"]),
         .testTarget(name: "LyricsXServicesTests", dependencies: ["LyricsXServices"]),
         .testTarget(name: "LyricsXAppTests", dependencies: ["LyricsXApp"]),
