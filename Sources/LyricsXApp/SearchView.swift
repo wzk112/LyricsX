@@ -6,8 +6,11 @@ struct SearchView: View {
     @Bindable var model: AppModel
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
+    @State private var previousQuery = ""
     @State private var results: [LyricCandidate] = []
     @State private var searching = false
+    @State private var retainedPreviousResults = false
+    @State private var sourceStatuses: [SourceSearchStatus] = []
     @State private var error: String?
     @State private var searchTask: Task<Void, Never>?
     @State private var deadline: Task<Void, Never>?
@@ -22,6 +25,17 @@ struct SearchView: View {
                 if searching { ProgressView().controlSize(.small) }
                 Button("搜索", action: search).buttonStyle(.glassProminent).disabled(query.trimmingCharacters(in: .whitespaces).isEmpty)
             }.padding(12).background(.quaternary.opacity(0.5), in: .rect(cornerRadius: 14))
+            if !sourceStatuses.isEmpty {
+                HStack(alignment: .top, spacing: 14) {
+                    ForEach(sourceStatuses) { status in
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("\(status.source) · \(status.count) 个版本" + (status.isSearching ? " …" : ""))
+                            if let issue = status.issue { Text(issue).foregroundStyle(.orange).lineLimit(2) }
+                            else if !status.isSearching, status.count == 0 { Text("暂无结果").foregroundStyle(.tertiary) }
+                        }.font(.caption2).frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }.foregroundStyle(.secondary)
+            }
             if let error { Text(error).font(.caption).foregroundStyle(.orange) }
             if results.isEmpty {
                 ContentUnavailableView(searching ? "正在搜索歌词" : "暂无结果", systemImage: "text.magnifyingglass", description: Text("也可以将本地 LRC 或 LRCX 文件拖入主窗口。"))
@@ -46,11 +60,17 @@ struct SearchView: View {
                     }.padding(.vertical, 8)
                 }.listStyle(.plain)
             }
-            HStack { Text("\(results.count) 个版本").font(.caption).foregroundStyle(.secondary); Spacer(); Button("导入本地歌词") { model.importLyrics() } }
-        }.padding(26).frame(width: 680, height: 490)
-            .onAppear { query = [model.session.track?.title, model.session.track?.artist].compactMap { $0 }.joined(separator: " "); trackID = model.session.track?.id; results = model.session.candidates }
+            HStack { Text("\(results.count) 个版本" + (retainedPreviousResults ? " · 包含上次搜索结果" : "")).font(.caption).foregroundStyle(.secondary); Spacer(); Button("导入本地歌词") { model.importLyrics() } }
+        }.padding(26).frame(width: 760, height: 570)
+            .onAppear { query = [model.session.track?.title, model.session.track?.artist].compactMap { $0 }.joined(separator: " "); trackID = model.session.track?.id; results = model.session.candidates; search() }
             .onDisappear { searchTask?.cancel(); deadline?.cancel() }
-            .onChange(of: model.session.track?.id) { _, _ in searchTask?.cancel(); deadline?.cancel(); searching = false; results = []; error = "歌曲已切换，请重新搜索。" }
+            .onChange(of: model.session.track?.id) { _, _ in searchTask?.cancel(); deadline?.cancel(); searching = false; requestID = UUID(); sourceStatuses = []; results = []; error = "歌曲已切换，请重新搜索。" }
+    }
+    private static func sameVersion(_ lhs: LyricsDocument, _ rhs: LyricsDocument) -> Bool {
+        guard lhs.source == rhs.source else { return false }
+        if let a = lhs.providerID, let b = rhs.providerID { return a == b }
+        return lhs.title == rhs.title && lhs.artist == rhs.artist && lhs.album == rhs.album
+            && lhs.lines == rhs.lines && lhs.plainText == rhs.plainText && lhs.isInstrumental == rhs.isInstrumental
     }
     private func searchTag(_ title: String) -> some View {
         Text(title).font(.caption2.weight(.medium)).foregroundStyle(.secondary)
@@ -59,22 +79,37 @@ struct SearchView: View {
     }
     private func search() {
         searchTask?.cancel(); deadline?.cancel()
-        let id = UUID(); requestID = id; searching = true; results = []; error = nil
+        let id = UUID(); requestID = id; searching = true; error = nil; sourceStatuses = []
+        // Keep the last completed versions visible while retrying a source.
+        // A transport failure must not make known results disappear.
+        if trackID != model.session.track?.id || previousQuery != query { results = [] }
+        retainedPreviousResults = !results.isEmpty
+        previousQuery = query
         let track = model.session.track ?? Track(playerID: "search", playerName: "搜索", title: query)
+        let configuration = model.preferences.sourceConfigurationReader.read()
         trackID = model.session.track?.id
         searchTask = Task {
             do {
-                for try await result in model.store.search(track: track, keyword: query) {
-                    guard !Task.isCancelled, requestID == id else { return }
-                    if !results.contains(where: { $0.document.source == result.document.source && $0.document.originalLRC == result.document.originalLRC }) {
-                        results.append(result); results.sort { $0.score > $1.score }
+                for try await result in model.store.search(track: track, keyword: query, onSourceUpdate: { status in
+                    Task { @MainActor in
+                        guard requestID == id else { return }
+                        if let index = sourceStatuses.firstIndex(where: { $0.source == status.source }) { sourceStatuses[index] = status }
+                        else { sourceStatuses.append(status) }
+                        let order = model.preferences.sourceOrder
+                        sourceStatuses.sort { (order.firstIndex(of: $0.source) ?? 99) < (order.firstIndex(of: $1.source) ?? 99) }
                     }
+                }) {
+                    guard !Task.isCancelled, requestID == id else { return }
+                    if let index = results.firstIndex(where: { $0.id == result.id || Self.sameVersion($0.document, result.document) }) {
+                        results[index] = result
+                    } else { results.append(result) }
+                    results.sort(by: configuration.manualPrecedes)
                 }
             } catch { if !Task.isCancelled, requestID == id { self.error = error.localizedDescription } }
             if requestID == id { searching = false; deadline?.cancel() }
         }
         deadline = Task {
-            do { try await Task.sleep(for: .seconds(18)) } catch { return }
+            do { try await Task.sleep(for: .seconds(44)) } catch { return }
             guard requestID == id else { return }; searchTask?.cancel(); searching = false
             if results.isEmpty { error = "歌词源响应超时，请重试。" }
         }

@@ -136,13 +136,17 @@ func liveRomanizedSongResolvesAndSearchesNativeTitle() async throws {
     }
     #expect(document(.init(id: 0, time: 0, text: "Hello", translation: "Hello\n你好")).hasTranslation)
     var line = LyricLine(id: 0, time: 0, text: "Hello", words: [.init(text: "Hello", start: 0, end: 2)])
+    #expect(document(line).hasWordTiming) // a real one-word line is still timed
+    line.words = [.init(text: "Hel", start: 0, end: 1), .init(text: "lo", start: 1, end: 1)]
+    #expect(document(line).hasWordTiming) // instantaneous final cue preserves the preceding cue
+    #expect(line.words[1].progress(at: 1) == 1)
+    line.words[1].end = .infinity
+    #expect(line.wordTimingRanges.count == 1) // reject only the malformed cue
+    line.words = [.init(text: "Wrong", start: 0, end: 1)]
     #expect(!document(line).hasWordTiming)
-    line.words = [.init(text: "Hel", start: 0, end: 1), .init(text: "lo", start: 1, end: 2)]
-    #expect(document(line).hasWordTiming)
-    line.words[1].end = 1; #expect(!document(line).hasWordTiming)
-    line.words[1].end = .infinity; #expect(!document(line).hasWordTiming)
-    line.words[1].end = 2; line.words[1].start = 0; #expect(!document(line).hasWordTiming)
-    line.words[1].start = 1; line.words[1].text = "Wrong"; #expect(!document(line).hasWordTiming)
+    line.words = [.init(text: "Hello", start: 2, end: 1)]
+    #expect(!document(line).hasWordTiming)
+
 }
 
 @Test func romanizationAttachmentIsNotMistakenForBilingualTranslation() throws {

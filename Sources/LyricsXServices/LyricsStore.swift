@@ -4,6 +4,7 @@ import LyricsXCore
 
 public struct SourceConfiguration: Sendable {
     public static let defaultOrder = ["LRCLIB", "NetEase", "QQMusic", "Kugou", "Musixmatch"]
+    var candidateLimit = 40
     public var enabled: Set<String> = ["LRCLIB", "NetEase", "QQMusic", "Kugou"]
     public var sourceOrder: [String] = defaultOrder
     public var preferBilingual = true
@@ -85,14 +86,27 @@ public struct SourceConfiguration: Sendable {
             return max(fallbackSelectionScore(document, for: query) ?? 0, relaxedSelectionScore(document, for: query) ?? 0)
         }.max() ?? 0
     }
+
+    /// Even a free-text query unrelated to the playing track must honor source
+    /// and feature preferences, rather than using network arrival order.
+    public func manualPrecedes(_ lhs: LyricCandidate, _ rhs: LyricCandidate) -> Bool {
+        if lhs.score != rhs.score { return lhs.score > rhs.score }
+        let left = preferenceBonus(lhs.document), right = preferenceBonus(rhs.document)
+        if left != right { return left > right }
+        let order = Self.normalizedOrder(sourceOrder)
+        let leftSource = order.firstIndex(of: lhs.document.source) ?? order.count
+        let rightSource = order.firstIndex(of: rhs.document.source) ?? order.count
+        if leftSource != rightSource { return leftSource < rightSource }
+        func key(_ doc: LyricsDocument) -> String { doc.title + "|" + doc.artist + "|" + doc.album + "|" + (doc.providerID ?? "") }
+        return key(lhs.document) < key(rhs.document)
+    }
 }
 
 public final class LyricsStore: LyricsRepository, Sendable {
-    /// Automatic search inspects the top ten candidates from each enabled
-    /// source before choosing. This reaches the versions manual search often
-    /// exposes without unbounded provider requests.
-    static let automaticCandidateLimit = 10
-    static let manualCandidateLimit = 10
+    /// Download budgets per source/query. Manual search retains more versions;
+    /// both paths use the same matching, aliases, and completion-order delivery.
+    static let automaticCandidateLimit = 40
+    static let manualCandidateLimit = 80
     public let cache: LyricsCache
     private let configuration: @Sendable () -> SourceConfiguration
     private let aliasResolver: TrackAliasResolver
@@ -101,10 +115,10 @@ public final class LyricsStore: LyricsRepository, Sendable {
     private let searchBudget: Duration
     public init(cache: LyricsCache = LyricsCache(), configuration: @escaping @Sendable () -> SourceConfiguration = { .init() }) {
         self.cache = cache; self.configuration = configuration
-        self.aliasResolver = TrackAliasResolver(); self.searchBackend = Self.providerSearch; self.searchBudget = .seconds(12)
+        self.aliasResolver = TrackAliasResolver(); self.searchBackend = Self.providerSearch; self.searchBudget = .seconds(24)
     }
     init(cache: LyricsCache, configuration: @escaping @Sendable () -> SourceConfiguration = { .init() },
-         aliasResolver: TrackAliasResolver, searchBudget: Duration = .seconds(12), searchBackend: @escaping SearchBackend) {
+         aliasResolver: TrackAliasResolver, searchBudget: Duration = .seconds(24), searchBackend: @escaping SearchBackend) {
         self.cache = cache; self.configuration = configuration; self.aliasResolver = aliasResolver
         self.searchBackend = searchBackend; self.searchBudget = searchBudget
     }
@@ -150,81 +164,93 @@ public final class LyricsStore: LyricsRepository, Sendable {
             continuation.onTermination = { _ in task.cancel() }
         }
     }
-    public func search(track: Track, keyword: String? = nil) -> AsyncThrowingStream<LyricCandidate, Error> {
-        let config = configuration()
+    public func search(track: Track, keyword: String? = nil,
+                       onSourceUpdate: @escaping @Sendable (SourceSearchStatus) -> Void = { _ in }) -> AsyncThrowingStream<LyricCandidate, Error> {
+        var config = configuration()
+        config.candidateLimit = keyword == nil ? Self.automaticCandidateLimit : Self.manualCandidateLimit
+        let configuration = config
         return AsyncThrowingStream { continuation in
+            let collector = SearchCollector(track: track, keyword: keyword, configuration: configuration,
+                                            continuation: continuation, onSourceUpdate: onSourceUpdate)
             let task = Task {
                 let sessionConfig = URLSessionConfiguration.ephemeral
-                sessionConfig.timeoutIntervalForRequest = 8
-                sessionConfig.timeoutIntervalForResource = 14
+                sessionConfig.timeoutIntervalForRequest = 6
+                sessionConfig.timeoutIntervalForResource = 9
+                sessionConfig.httpMaximumConnectionsPerHost = 4
                 let session = URLSession(configuration: sessionConfig)
                 defer { session.invalidateAndCancel() }
                 let client = SecureLyricsHTTPClient(session: session)
+                await collector.begin()
+                let budget = keyword == nil ? searchBudget : max(searchBudget, .seconds(40))
                 let deadline = Task {
-                    do { try await Task.sleep(for: searchBudget) } catch { return }
+                    do { try await Task.sleep(for: budget) } catch { return }
+                    await collector.finish(timedOut: true)
                     continuation.finish(throwing: StoreError.timeout)
                     session.invalidateAndCancel()
                 }
                 defer { deadline.cancel() }
-                let collector = SearchCollector(track: track, configuration: config, continuation: continuation)
+                // One worker per source. Newly discovered native names enter
+                // each source's queue immediately, ahead of broad title-only
+                // queries; no slow source can block alias expansion elsewhere.
                 await withTaskGroup(of: Void.self) { group in
-                    for query in Self.queryKeywords(track: track, keyword: keyword) {
-                        group.addTask { await self.collect(track: track, keyword: query, client: client, config: config, collector: collector) }
-                    }
-                    if keyword == nil {
-                        group.addTask {
+                    group.addTask {
+                        if Self.usesTrackHints(track: track, keyword: keyword) {
                             let aliases = await self.aliasResolver.aliases(for: track, client: client)
-                            guard !Task.isCancelled else { return }
-                            await collector.addAliases(aliases)
-                            await withTaskGroup(of: Void.self) { aliasGroup in
-                                for alias in aliases {
-                                    for query in Self.queryKeywords(track: alias, keyword: nil) {
-                                        aliasGroup.addTask { await self.collect(track: alias, keyword: query, client: client, config: config, collector: collector) }
+                            if !Task.isCancelled { await collector.addAliases(aliases) }
+                        }
+                        await collector.catalogFinished()
+                    }
+                    for source in configuration.availableSources {
+                        var single = configuration; single.enabled = [source]
+                        let sourceConfig = single
+                        group.addTask {
+                            while let query = await collector.nextQuery(source: source) {
+                                guard !Task.isCancelled else { return }
+                                do {
+                                    for try await document in self.searchBackend(query.track, query.keyword, sourceConfig, client) {
+                                        guard !Task.isCancelled else { return }
+                                        _ = await collector.add(document)
                                     }
+                                    await collector.completed(source: source, error: nil)
+                                } catch {
+                                    if Task.isCancelled { return }
+                                    await collector.completed(source: source, error: SourceSearchStatus.describe(error))
                                 }
                             }
                         }
                     }
                 }
+                guard !Task.isCancelled else { return }
+                await collector.finish(timedOut: false)
                 if await collector.allFailed { continuation.finish(throwing: StoreError.unavailable) }
                 else { continuation.finish() }
             }
-            continuation.onTermination = { _ in task.cancel() }
+            continuation.onTermination = { _ in task.cancel(); Task { await collector.cancel() } }
         }
     }
 
-    /// Manual and automatic search share the keyword path. Title-only queries
-    /// recover songs where a provider cannot match a localized artist spelling.
-    static func queryKeywords(track: Track, keyword: String?) -> [String?] {
-        if let keyword { return [keyword] }
-        return [nil] + TrackSearchText.titles(track.title).map { Optional($0) }
+    static func usesTrackHints(track: Track, keyword: String?) -> Bool {
+        guard let keyword else { return true }
+        let value = CandidateRanker.normalized(keyword)
+        return value == CandidateRanker.normalized(track.title)
+            || value == CandidateRanker.normalized(track.title + " " + track.artist)
     }
 
-    private func collect(track: Track, keyword: String?, client: SecureLyricsHTTPClient,
-                         config: SourceConfiguration, collector: SearchCollector) async {
-        do {
-            for try await document in searchBackend(track, keyword, config, client) {
-                guard !Task.isCancelled else { return }
-                let discovered = await collector.add(document)
-                for alias in discovered {
-                    guard !Task.isCancelled else { return }
-                    await collect(track: alias, keyword: nil, client: client, config: config, collector: collector)
-                }
-            }
-            await collector.completed(failed: false)
-        } catch { await collector.completed(failed: true) }
+    static func queryKeywords(track: Track, keyword: String?) -> [String?] {
+        if let keyword, !usesTrackHints(track: track, keyword: keyword) { return [keyword] }
+        return [nil] + TrackSearchText.titles(track.title).map { Optional($0) }
     }
 
     private static func providerSearch(track: Track, keyword: String?, config: SourceConfiguration,
                                        client: SecureLyricsHTTPClient) -> AsyncThrowingStream<LyricsDocument, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
-                let services: [LyricsProviders.Service<LyricsProviders.EmptyOptions>] = [.lrclib, .netease, .qq, .kugou]
+                let services: [LyricsProviders.Service<LyricsProviders.EmptyOptions>] = [.netease, .qq, .kugou]
                 var providers: [any LyricsProvider] = services.filter { config.enabled.contains($0.displayName) }.map { $0.create(httpClient: client) }
                 if let token = config.musixmatchToken, !token.isEmpty, config.enabled.contains("Musixmatch") {
                     providers.append(LyricsProviders.Service.musixmatch.create(.init(usertoken: token), httpClient: client))
                 }
-                let limit = keyword == nil ? Self.automaticCandidateLimit : Self.manualCandidateLimit
+                let limit = config.candidateLimit
                 let request = LyricsSearchRequest(searchTerm: keyword.map { .keyword($0) } ?? .info(title: track.title, artist: track.artist), duration: track.duration, limit: limit)
                 let failures = await withTaskGroup(of: String?.self, returning: [String].self) { group in
                     for provider in providers {
@@ -237,18 +263,21 @@ public final class LyricsStore: LyricsRepository, Sendable {
                                 }
                                 return nil
                             } catch is CancellationError { return nil }
-                            catch { return error.localizedDescription }
+                            catch {
+                                if ProcessInfo.processInfo.environment["LYRICSX_SEARCH_DIAGNOSTICS"] == "1" { print("PROVIDER_ERROR \(SourceSearchStatus.describe(error))") }
+                                return SourceSearchStatus.describe(error)
+                            }
                         }
                     }
-                    // LRCLIB also returns unsynchronised and instrumental entries.
-                    if config.enabled.contains("LRCLIB"), keyword == nil {
+                    if config.enabled.contains("LRCLIB") {
                         group.addTask {
                             do {
-                                if let doc = try await Self.fetchPlainLRCLIB(track: track, client: client) {
+                                for doc in try await LRCLIBSearch.documents(track: track, keyword: keyword, client: client) {
+                                    try Task.checkCancellation()
                                     continuation.yield(doc)
                                 }
-                            } catch { /* Other LRCLIB search results remain usable. */ }
-                            return nil
+                                return nil
+                            } catch { return SourceSearchStatus.describe(error) }
                         }
                     }
                     var errors: [String] = []
@@ -256,7 +285,7 @@ public final class LyricsStore: LyricsRepository, Sendable {
                     return errors
                 }
                 if Task.isCancelled { continuation.finish(throwing: CancellationError()) }
-                else if !providers.isEmpty, failures.count >= providers.count { continuation.finish(throwing: StoreError.unavailable) }
+                else if !failures.isEmpty { continuation.finish(throwing: StoreError.sourceFailure(failures.joined(separator: "；"))) }
                 else { continuation.finish() }
             }
             continuation.onTermination = { _ in task.cancel() }
@@ -272,26 +301,13 @@ public final class LyricsStore: LyricsRepository, Sendable {
         for base in bases { for ext in ["lrcx", "lrc"] { if let doc = try? LyricsCodec.read(base.appendingPathExtension(ext)) { return doc } } }
         return nil
     }
-    private struct LRCLIBRecord: Decodable {
-        var trackName: String; var artistName: String; var albumName: String; var duration: Double
-        var instrumental: Bool; var plainLyrics: String?; var syncedLyrics: String?
-    }
-    private static func fetchPlainLRCLIB(track: Track, client: SecureLyricsHTTPClient) async throws -> LyricsDocument? {
-        var url = URLComponents(string: "https://lrclib.net/api/get")!
-        url.queryItems = [URLQueryItem(name: "track_name", value: track.title), URLQueryItem(name: "artist_name", value: track.artist),
-                          URLQueryItem(name: "album_name", value: track.album), URLQueryItem(name: "duration", value: String(track.duration))]
-        let (data, response) = try await client.data(for: URLRequest(url: url.url!))
-        guard response.statusCode == 200 else { return nil }
-        let item = try JSONDecoder().decode(LRCLIBRecord.self, from: data)
-        guard item.syncedLyrics?.isEmpty != false, item.instrumental || item.plainLyrics?.isEmpty == false else { return nil }
-        return LyricsDocument(title: item.trackName, artist: item.artistName, album: item.albumName, source: "LRCLIB", duration: item.duration,
-                              plainText: item.plainLyrics, isInstrumental: item.instrumental)
-    }
     enum StoreError: LocalizedError {
         case unavailable, timeout
+        case sourceFailure(String)
         var errorDescription: String? {
             switch self {
-            case .unavailable: "暂时无法连接歌词源，请检查网络后重试。"
+            case .unavailable: "歌词源未能完成搜索，请查看各来源状态后重试。"
+            case .sourceFailure(let message): message
             case .timeout: "部分歌词源响应超时，已保留可用结果；可以重新搜索。"
             }
         }
@@ -316,6 +332,26 @@ struct SecureLyricsHTTPClient: HTTPClient {
             components.scheme = "https"; request.url = components.url
         }
         request.setValue("LyricsX/2.0 (https://github.com/MxIris-LyricsX-Project/LyricsX)", forHTTPHeaderField: "X-Client")
+        for attempt in 0..<2 {
+            do {
+                try Task.checkCancellation()
+                let result = try await perform(request, host: host, path: original.path)
+                guard (200..<300).contains(result.1.statusCode) else { throw HTTPResponseError(status: result.1.statusCode) }
+                return result
+            } catch {
+                let retryable: Bool
+                if let status = error as? HTTPResponseError { retryable = [408, 500, 502, 503, 504].contains(status.status) }
+                else {
+                    let value = error as NSError
+                    retryable = value.domain == NSURLErrorDomain && [NSURLErrorTimedOut, NSURLErrorNetworkConnectionLost, NSURLErrorCannotConnectToHost].contains(value.code)
+                }
+                guard attempt == 0, retryable, !Task.isCancelled else { throw error }
+                try await Task.sleep(for: .milliseconds(350))
+            }
+        }
+        throw URLError(.unknown)
+    }
+    private func perform(_ request: URLRequest, host: String, path: String) async throws -> (Data, HTTPURLResponse) {
         // macOS 27.0 can abort the process from URLSession.data(for:) while QQ
         // Music performs its optional cover request. The data-task API keeps the
         // same timeout and cancellation behavior without that async bridge.
@@ -323,6 +359,9 @@ struct SecureLyricsHTTPClient: HTTPClient {
         return try await withTaskCancellationHandler {
           try await withCheckedThrowingContinuation { continuation in
             let task = session.dataTask(with: request) { data, response, error in
+                if ProcessInfo.processInfo.environment["LYRICSX_SEARCH_DIAGNOSTICS"] == "1" {
+                    print("HTTP_RESULT host=\(host) path=\(path) status=\((response as? HTTPURLResponse)?.statusCode ?? 0) bytes=\(data?.count ?? 0) error=\((error as NSError?)?.code ?? 0)")
+                }
                 if let error { continuation.resume(throwing: error); return }
                 guard let data, data.count < 8_000_000, let response = response as? HTTPURLResponse else {
                     continuation.resume(throwing: URLError(.badServerResponse)); return
@@ -352,8 +391,10 @@ private actor SearchCollector {
     struct Key: Hashable {
         var title: String; var artist: String; var source: String
         var lines: [LyricLine]; var plain: String?; var instrumental: Bool
+        var providerID: String?; var album: String
         init(_ document: LyricsDocument) {
             title = document.title; artist = document.artist; source = document.source
+            providerID = document.providerID; album = document.album
             lines = document.lines; plain = document.plainText; instrumental = document.isInstrumental
         }
     }
@@ -362,29 +403,68 @@ private actor SearchCollector {
     let continuation: AsyncThrowingStream<LyricCandidate, Error>.Continuation
     var aliases: [Track] = []
     var candidates: [Key: LyricCandidate] = [:]
+    let onSourceUpdate: @Sendable (SourceSearchStatus) -> Void
+    var sourceErrors: [String: String] = [:]
+    var activeSources: Set<String> = []
+    struct Query: Sendable {
+        let track: Track
+        let keyword: String?
+        var key: String {
+            keyword.map { "q:" + CandidateRanker.normalized($0) }
+                ?? "i:" + CandidateRanker.normalized(track.title) + "|" + CandidateRanker.normalized(track.artist)
+        }
+    }
+    var queues: [String: [Query]] = [:]
+    var queryKeys: [String: Set<String>] = [:]
+    var waiters: [String: CheckedContinuation<Query?, Never>] = [:]
+    var catalogDone = false
+    let useTrackHints: Bool
+    var finished = false
     var successes = 0
     var failures = 0
     var allFailed: Bool { candidates.isEmpty && successes == 0 && failures > 0 }
-    init(track: Track, configuration: SourceConfiguration, continuation: AsyncThrowingStream<LyricCandidate, Error>.Continuation) {
+    init(track: Track, keyword: String?, configuration: SourceConfiguration, continuation: AsyncThrowingStream<LyricCandidate, Error>.Continuation, onSourceUpdate: @escaping @Sendable (SourceSearchStatus) -> Void) {
+        self.onSourceUpdate = onSourceUpdate
+        self.useTrackHints = LyricsStore.usesTrackHints(track: track, keyword: keyword)
         self.track = track; self.configuration = configuration; self.continuation = continuation
+        let queries = LyricsStore.queryKeywords(track: track, keyword: keyword).map { Query(track: track, keyword: $0) }
+        for source in configuration.availableSources {
+            queues[source] = queries
+            queryKeys[source] = Set(queries.map(\.key))
+        }
     }
     func add(_ document: LyricsDocument) -> [Track] {
+        guard !finished else { return [] }
         guard document.isSynced || document.isInstrumental || document.plainText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else { return [] }
-        var discovered = addAliases(ArtistAliasEvidence.aliases(in: document, for: track))
-        discovered += addAliases(ArtistAliasEvidence.searchTitles(in: document, for: track, aliases: aliases))
+        var discovered: [Track] = []
+        if useTrackHints {
+            discovered = addAliases(ArtistAliasEvidence.aliases(in: document, for: track))
+            discovered += addAliases(ArtistAliasEvidence.searchTitles(in: document, for: track, aliases: aliases))
+        }
         let key = Key(document)
         guard candidates[key] == nil else { return discovered }
         let candidate = LyricCandidate(document: document, score: configuration.bestScore(document, for: track, aliases: aliases))
         candidates[key] = candidate
         continuation.yield(candidate)
+        report(document.source)
         return discovered
     }
     @discardableResult func addAliases(_ values: [Track]) -> [Track] {
+        guard !finished else { return [] }
         var added: [Track] = []
         for value in values where aliases.count < 4 {
             guard !aliases.contains(where: { CandidateRanker.normalized($0.title) == CandidateRanker.normalized(value.title)
                 && CandidateRanker.normalized($0.artist) == CandidateRanker.normalized(value.artist) }) else { continue }
             aliases.append(value); added.append(value)
+            for source in configuration.availableSources {
+                let queries = LyricsStore.queryKeywords(track: value, keyword: nil).map { Query(track: value, keyword: $0) }
+                    .filter { queryKeys[source, default: []].insert($0.key).inserted }
+                queues[source, default: []].insert(contentsOf: queries, at: 0)
+                if !queries.isEmpty, let waiter = waiters.removeValue(forKey: source) {
+                    activeSources.insert(source)
+                    waiter.resume(returning: queues[source]!.removeFirst())
+                }
+            }
         }
         guard !added.isEmpty else { return [] }
         for (key, var candidate) in candidates {
@@ -395,5 +475,44 @@ private actor SearchCollector {
         }
         return added
     }
-    func completed(failed: Bool) { if failed { failures += 1 } else { successes += 1 } }
+    func begin() { for source in configuration.availableSources { report(source) } }
+    func completed(source: String, error: String?) {
+        guard !finished else { return }
+        activeSources.remove(source)
+        if let error { failures += 1; sourceErrors[source] = error }
+        else { successes += 1 }
+        report(source)
+    }
+    func catalogFinished() { catalogDone = true; finishWaitingIfDrained() }
+    func nextQuery(source: String) async -> Query? {
+        guard !finished, !Task.isCancelled else { return nil }
+        if queues[source]?.isEmpty == false {
+            activeSources.insert(source)
+            return queues[source]!.removeFirst()
+        }
+        return await withCheckedContinuation { waiter in
+            waiters[source] = waiter
+            finishWaitingIfDrained()
+        }
+    }
+    private func finishWaitingIfDrained() {
+        guard catalogDone, activeSources.isEmpty, queues.values.allSatisfy(\.isEmpty) else { return }
+        let pending = waiters.values; waiters = [:]
+        for waiter in pending { waiter.resume(returning: nil) }
+    }
+    func cancel() {
+        finished = true
+        let pending = waiters.values; waiters = [:]
+        for waiter in pending { waiter.resume(returning: nil) }
+    }
+    func finish(timedOut: Bool) {
+        guard !finished else { return }
+        for source in configuration.availableSources { report(source, finished: true, timedOut: timedOut && activeSources.contains(source)) }
+        cancel()
+    }
+    private func report(_ source: String, finished: Bool = false, timedOut: Bool = false) {
+        let count = candidates.values.filter { $0.document.source == source }.count
+        onSourceUpdate(.init(source: source, count: count, isSearching: !finished,
+                             issue: sourceErrors[source] ?? (timedOut ? "搜索超时，已保留结果" : nil)))
+    }
 }

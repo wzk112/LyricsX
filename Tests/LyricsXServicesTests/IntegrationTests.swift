@@ -12,7 +12,9 @@ func diagnoseSearchCandidates() async throws {
     let cache = LyricsCache(directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
     let store = LyricsStore(cache: cache)
     var documents: [LyricsDocument] = []
-    for try await value in store.search(track: track, keyword: env["LYRICSX_DIAG_KEYWORD"]) {
+    for try await value in store.search(track: track, keyword: env["LYRICSX_DIAG_KEYWORD"], onSourceUpdate: { status in
+        if !status.isSearching { print("SEARCH_SOURCE source=\(status.source) count=\(status.count) issue=\(status.issue ?? "none")") }
+    }) {
         let doc = value.document
         documents.append(doc)
         print("SEARCH_CANDIDATE score=\(value.score) source=\(doc.source) title=\(doc.title) artist=\(doc.artist) duration=\(doc.duration) word=\(doc.hasWordTiming) bilingual=\(doc.hasTranslation) lines=\(doc.lines.count)")
@@ -57,4 +59,29 @@ func liveSourceSmoke() async throws {
     #expect(results.count == 1)
     #expect(results.first?.document.plainText == "first line\nsecond line")
     #expect(results.first?.score == 999)
+}
+
+@Test(.enabled(if: ProcessInfo.processInfo.environment["LYRICSX_LIVE_SEARCH_RECOVERY"] == "1"))
+func liveSearchRecoversAllSourcesAcrossRepeatedSearches() async throws {
+    let track = Track(playerID: "test", playerName: "", title: "In My Feelings", artist: "Nerissa Ravencroft", duration: 207.84)
+    for run in 1...3 {
+        let store = LyricsStore(cache: LyricsCache(directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)))
+        var values: [LyricsDocument] = []
+        do {
+            for try await candidate in store.search(track: track, keyword: track.title + " " + track.artist) { values.append(candidate.document) }
+        } catch { print("LIVE_SEARCH_PARTIAL run=\(run) error=\(error.localizedDescription)") }
+        let counts = Dictionary(grouping: values, by: \.source).mapValues(\.count)
+        let matched = values.filter { CandidateRanker.score($0, for: track) >= 60 }
+        print("LIVE_SEARCH_RECOVERY run=\(run) counts=\(counts) matched=\(matched.count)")
+        #expect(counts.count >= 3)
+        #expect(matched.contains { $0.source == "LRCLIB" })
+        #expect(matched.contains { $0.source == "NetEase" && $0.hasTranslation })
+    }
+    let store = LyricsStore(cache: LyricsCache(directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)))
+    var results: [LyricCandidate] = []
+    for try await candidate in store.lyrics(for: track, forceRefresh: true) { results.append(candidate) }
+    let best = try #require(results.first)
+    print("LIVE_RECOVERY_WINNER source=\(best.document.source) title=\(best.document.title) bilingual=\(best.document.hasTranslation) word=\(best.document.hasWordTiming)")
+    #expect(CandidateRanker.compatibleArtists(best.document.artist, for: track))
+    #expect(best.document.hasTranslation)
 }

@@ -20,9 +20,17 @@
 - “设置 → 通用”可分别隐藏 Dock 图标、菜单栏图标和菜单栏歌词；隐藏后仍能使用 ⌥⌘O 打开主窗口。
 - 联网搜索结果默认保存为 `.lrcx`，保留逐字时间和来源附加信息；仍可导入、读取 `.lrc` 和纯文本歌词。
 
+## 歌词搜索
+
+搜索页会逐步展示所有已取得的结果，并分别显示每个来源的数量、搜索进度和异常。匹配、逐字、双语和来源顺序决定排序与自动选择，不会把其他版本从手动搜索中删除。不同来源及不同版本 ID 的结果分别保留。
+
+自动搜索每个来源、每个查询最多下载 40 个候选；手动搜索最多 80 个，LRCLIB 保留接口直接返回的可用记录。搜索当前歌曲时，同时使用完整信息、歌名及经过验证的跨语言别名；搜索其他关键词时尊重输入内容。下载按完成顺序显示，同一来源最多并发 4 个歌词下载。自动搜索最多等待 24 秒，手动深度搜索最多 40 秒；超时保留已有结果，重试时也保留同一查询的上次结果。
+
+逐字标签依据实际可用的时间标记；允许零时长字符、未标记的标点和重叠时间，不会因为其中一个异常字符移除整句动画。普通 LRC 不会凭空生成逐字时间。网易云逐字歌词也会合并对应翻译。
+
 ## 安装
 
-从 [Releases](https://github.com/wzk112/LyricsX/releases) 下载最新的 `LyricsX-2.0.6.zip`，解压后将 `LyricsX.app` 拖到 `/Applications`。
+从 [Releases](https://github.com/wzk112/LyricsX/releases) 下载最新的 `LyricsX-2.0.7.zip`，解压后将 `LyricsX.app` 拖到 `/Applications`。
 
 本次包使用本机 ad-hoc 签名，没有 Developer ID 公证票据。首次打开时如果 macOS 提示无法验证开发者：
 
@@ -34,7 +42,7 @@
    xattr -dr com.apple.quarantine /Applications/LyricsX.app
    ```
 
-完整的安装、签名和版本说明见 [`docs/releases/v2.0.6.md`](docs/releases/v2.0.6.md)。
+完整的安装、签名和版本说明见 [`docs/releases/v2.0.7.md`](docs/releases/v2.0.7.md)。
 
 ## 播放器权限
 
@@ -68,6 +76,7 @@ open build/LyricsX.app
 Sources/LyricsXCore       播放快照、歌词模型、时间轴和身份校验
 Sources/LyricsXServices   播放器桥接、歌词搜索、缓存和编码
 Sources/LyricsXApp        SwiftUI 主窗口、设置、菜单栏和悬浮窗
+Vendor/LyricsKit          包含来源修复的 LyricsKit 固定源码和原许可证
 Tests/                    时间轴、缓存、来源优先级、播放器和窗口回归测试
 Legacy/LyricsX            原 LyricsX 项目
 Legacy/LyricsXPackage     原 LyricsXPackage 项目

@@ -22,7 +22,7 @@ public final class LyricsSession {
     @ObservationIgnored private var seekProtectionUntil = 0.0
     @ObservationIgnored private var pendingSeekTarget: Double?
 
-    public init(repository: any LyricsRepository, searchTimeout: Duration = .seconds(18)) {
+    public init(repository: any LyricsRepository, searchTimeout: Duration = .seconds(28)) {
         self.repository = repository; self.searchTimeout = searchTimeout
     }
     public func accept(_ snapshot: PlaybackSnapshot, now: Double = ProcessInfo.processInfo.systemUptime, shouldSearch: Bool = true) {

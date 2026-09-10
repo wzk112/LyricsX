@@ -44,7 +44,7 @@ public enum LyricsCodec {
         return LyricsDocument(title: lyrics.idTags[.title] ?? "", artist: lyrics.idTags[.artist] ?? "",
                               album: lyrics.idTags[.album] ?? "", source: source ?? lyrics.metadata.service ?? "未知来源",
                               duration: lyrics.length ?? 0, lines: rows, offsetMilliseconds: lyrics.offset,
-                              originalLRC: lyrics.description, artworkURL: lyrics.metadata.artworkURL)
+                              originalLRC: lyrics.description, artworkURL: lyrics.metadata.artworkURL, providerID: lyrics.metadata.serviceToken)
     }
     public static func read(_ url: URL) throws -> LyricsDocument {
         let attributes = try FileManager.default.attributesOfItem(atPath: url.path)

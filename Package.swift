@@ -9,7 +9,7 @@ let package = Package(
         .library(name: "LyricsXCore", targets: ["LyricsXCore"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/MxIris-LyricsX-Project/LyricsKit", revision: "bb255842eb8fe48880e15c23c0a7704599dd3504"),
+        .package(path: "Vendor/LyricsKit"),
         .package(url: "https://github.com/MxIris-LyricsX-Project/mediaremote-adapter", revision: "0fa7db9dea7cdb72bbb4090eaccf2355d8e4279e"),
     ],
     targets: [

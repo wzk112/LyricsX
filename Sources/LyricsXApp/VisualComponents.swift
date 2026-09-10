@@ -118,14 +118,15 @@ struct WordHighlight: View {
     }
     private var attributedText: AttributedString {
         var result = AttributedString()
-        let covered = line.words.map(\.text).joined()
-        guard covered == text else { return AttributedString(text) }
-        for word in line.words {
+        var cursor = text.startIndex
+        for (range, word) in line.wordTimingRanges {
+            if cursor < range.lowerBound { result.append(AttributedString(String(text[cursor..<range.lowerBound]))) }
             var fragment = AttributedString(word.text)
-            let progress = word.progress(at: time)
-            fragment.foregroundColor = .white.opacity(0.40 + 0.60 * progress)
+            fragment.foregroundColor = .white.opacity(0.40 + 0.60 * word.progress(at: time))
             result.append(fragment)
+            cursor = range.upperBound
         }
+        if cursor < text.endIndex { result.append(AttributedString(String(text[cursor...]))) }
         return result
     }
 }

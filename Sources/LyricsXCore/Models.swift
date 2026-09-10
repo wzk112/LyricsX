@@ -56,6 +56,7 @@ public struct WordCue: Codable, Hashable, Sendable {
     public init(text: String, start: Double, end: Double) { self.text = text; self.start = start; self.end = end }
     public func progress(at time: Double) -> Double {
         guard time.isFinite else { return 0 }
+        if end == start { return time >= start ? 1 : 0 }
         return min(1, max(0, (time - start) / max(0.001, end - start)))
     }
 }
@@ -67,18 +68,22 @@ public struct LyricLine: Codable, Hashable, Sendable, Identifiable {
     public var translation: String?
     public var words: [WordCue]
     public var attachments: [String: String]
-    /// Require real, ordered segments that cover the original line. A single
-    /// whole-line cue provides line timing, not progressive word highlighting.
-    public var hasWordTiming: Bool {
-        let segments = words.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        guard segments.count >= 2, words.map(\.text).joined() == text else { return false }
-        var end = time
-        for word in words {
-            guard word.start.isFinite, word.end.isFinite, word.start >= time,
-                  word.end > word.start, word.start >= end - 0.001 else { return false }
-            end = word.end
+    /// Real tags may omit punctuation, have instantaneous characters or
+    /// overlapping durations. Keep every usable cue instead of rejecting the
+    /// whole line. Unmatched text remains visible without fabricated timing.
+    public var wordTimingRanges: [(range: Range<String.Index>, cue: WordCue)] {
+        var cursor = text.startIndex
+        var result: [(Range<String.Index>, WordCue)] = []
+        for cue in words {
+            guard !cue.text.isEmpty, cue.start.isFinite, cue.end.isFinite,
+                  cue.start >= 0, cue.end >= cue.start,
+                  let range = text.range(of: cue.text, range: cursor..<text.endIndex) else { continue }
+            result.append((range, cue)); cursor = range.upperBound
         }
-        return true
+        return result
+    }
+    public var hasWordTiming: Bool {
+        wordTimingRanges.contains { !$0.cue.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.cue.end > $0.cue.start }
     }
     public var hasTranslation: Bool {
         guard let translation else { return false }
@@ -108,14 +113,16 @@ public struct LyricsDocument: Codable, Hashable, Sendable, Identifiable {
     public var isInstrumental: Bool
     public var originalLRC: String
     public var artworkURL: URL?
+    public var providerID: String?
     public init(id: UUID = UUID(), title: String = "", artist: String = "", album: String = "", source: String = "本地",
                 duration: Double = 0, lines: [LyricLine] = [], plainText: String? = nil,
-                offsetMilliseconds: Int = 0, isInstrumental: Bool = false, originalLRC: String = "", artworkURL: URL? = nil) {
+                offsetMilliseconds: Int = 0, isInstrumental: Bool = false, originalLRC: String = "", artworkURL: URL? = nil, providerID: String? = nil) {
         self.id = id; self.title = title; self.artist = artist; self.album = album; self.source = source
         self.duration = duration; self.lines = lines.filter { $0.time.isFinite && $0.time >= 0 }.sorted { $0.time < $1.time }
         for index in self.lines.indices { self.lines[index].id = index }
         self.plainText = plainText; self.offsetMilliseconds = offsetMilliseconds
         self.isInstrumental = isInstrumental; self.originalLRC = originalLRC; self.artworkURL = artworkURL
+        self.providerID = providerID
     }
     public var hasWordTiming: Bool { lines.contains(where: { $0.hasWordTiming }) }
     public var hasTranslation: Bool { lines.contains(where: { $0.hasTranslation }) }

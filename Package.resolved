@@ -1,5 +1,5 @@
 {
-  "originHash" : "0827755241ff3c30d24340bf32851bb8a3108e617cf454c7d667e714e7de8335",
+  "originHash" : "83929f22e32b925acf4b3c7067bd61a5215b061de7a45faee12e2b0b94093c85",
   "pins" : [
     {
       "identity" : "bigint",
@@ -26,14 +26,6 @@
       "state" : {
         "revision" : "9fa37fa0f6eb6c3eb22fa92aca55045b6508c6dc",
         "version" : "0.12.0"
-      }
-    },
-    {
-      "identity" : "lyricskit",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/MxIris-LyricsX-Project/LyricsKit",
-      "state" : {
-        "revision" : "bb255842eb8fe48880e15c23c0a7704599dd3504"
       }
     },
     {
