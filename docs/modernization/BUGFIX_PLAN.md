@@ -308,19 +308,19 @@ P0：阻塞日常使用，优先解决。P1：本轮稳定版交付前完成。
 
 以下行号基于计划撰写时的源码，实施后可能变化。
 
-- [悬浮窗显示判断、全窗口穿透与尺寸恢复](/Users/andywang/Documents/Codex/2026-09-11/https-github-com-mxiris-lyricsx-project/outputs/LyricsX/Sources/LyricsXApp/OverlayController.swift:34)
-- [悬浮窗单向锁定按钮](/Users/andywang/Documents/Codex/2026-09-11/https-github-com-mxiris-lyricsx-project/outputs/LyricsX/Sources/LyricsXApp/OverlayController.swift:80)
-- [玻璃下的额外底色](/Users/andywang/Documents/Codex/2026-09-11/https-github-com-mxiris-lyricsx-project/outputs/LyricsX/Sources/LyricsXApp/OverlayController.swift:108)
-- [设置标题与 TabView](/Users/andywang/Documents/Codex/2026-09-11/https-github-com-mxiris-lyricsx-project/outputs/LyricsX/Sources/LyricsXApp/PreferencesView.swift:13)
-- [主窗口 sheet 路由与宣传文案](/Users/andywang/Documents/Codex/2026-09-11/https-github-com-mxiris-lyricsx-project/outputs/LyricsX/Sources/LyricsXApp/MainView.swift:19)
-- [系统时间戳补偿](/Users/andywang/Documents/Codex/2026-09-11/https-github-com-mxiris-lyricsx-project/outputs/LyricsX/Sources/LyricsXServices/PlayerBridge.swift:28)
-- [命令忙碌时丢弃操作、读取回退](/Users/andywang/Documents/Codex/2026-09-11/https-github-com-mxiris-lyricsx-project/outputs/LyricsX/Sources/LyricsXServices/PlayerBridge.swift:105)
-- [本地时间轴](/Users/andywang/Documents/Codex/2026-09-11/https-github-com-mxiris-lyricsx-project/outputs/LyricsX/Sources/LyricsXCore/PlaybackTimeline.swift:4)
-- [固定 0.8 秒 seek 屏蔽](/Users/andywang/Documents/Codex/2026-09-11/https-github-com-mxiris-lyricsx-project/outputs/LyricsX/Sources/LyricsXCore/LyricsSession.swift:27)
-- [读取错误被转换成暂停、生命周期与导入](/Users/andywang/Documents/Codex/2026-09-11/https-github-com-mxiris-lyricsx-project/outputs/LyricsX/Sources/LyricsXApp/AppModel.swift:39)
-- [拖动进度预览](/Users/andywang/Documents/Codex/2026-09-11/https-github-com-mxiris-lyricsx-project/outputs/LyricsX/Sources/LyricsXApp/NowPlayingView.swift:26)
-- [旧缓存路径、文件匹配与写回](/Users/andywang/Documents/Codex/2026-09-11/https-github-com-mxiris-lyricsx-project/outputs/LyricsX/Sources/LyricsXServices/LyricsCache.swift:5)
-- [应用场景和菜单栏入口](/Users/andywang/Documents/Codex/2026-09-11/https-github-com-mxiris-lyricsx-project/outputs/LyricsX/Sources/LyricsXApp/LyricsXApp.swift:8)
-- [已有同步回归测试](/Users/andywang/Documents/Codex/2026-09-11/https-github-com-mxiris-lyricsx-project/outputs/LyricsX/Tests/LyricsXCoreTests/SessionTests.swift:21)
+- [悬浮窗显示判断、全窗口穿透与尺寸恢复](../../Sources/LyricsXApp/OverlayController.swift#L34)
+- [悬浮窗单向锁定按钮](../../Sources/LyricsXApp/OverlayController.swift#L80)
+- [玻璃下的额外底色](../../Sources/LyricsXApp/OverlayController.swift#L108)
+- [设置标题与 TabView](../../Sources/LyricsXApp/PreferencesView.swift#L13)
+- [主窗口 sheet 路由与宣传文案](../../Sources/LyricsXApp/MainView.swift#L19)
+- [系统时间戳补偿](../../Sources/LyricsXServices/PlayerBridge.swift#L28)
+- [命令忙碌时丢弃操作、读取回退](../../Sources/LyricsXServices/PlayerBridge.swift#L105)
+- [本地时间轴](../../Sources/LyricsXCore/PlaybackTimeline.swift#L4)
+- [固定 0.8 秒 seek 屏蔽](../../Sources/LyricsXCore/LyricsSession.swift#L27)
+- [读取错误被转换成暂停、生命周期与导入](../../Sources/LyricsXApp/AppModel.swift#L39)
+- [拖动进度预览](../../Sources/LyricsXApp/NowPlayingView.swift#L26)
+- [旧缓存路径、文件匹配与写回](../../Sources/LyricsXServices/LyricsCache.swift#L5)
+- [应用场景和菜单栏入口](../../Sources/LyricsXApp/LyricsXApp.swift#L8)
+- [已有同步回归测试](../../Tests/LyricsXCoreTests/SessionTests.swift#L21)
 
 本轮完成条件：上述修复全部经过相应验证后，才把对应问题标记为已修复；剩余问题继续保留在清单中。

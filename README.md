@@ -1,85 +1,93 @@
 # LyricsX
 
-> [!IMPORTANT]  
-> This is the version of LyricsX that I personally maintain. The original author seems to have stopped maintaining it. I will fix some remaining bugs and add some new features in my spare time.
+> 面向 macOS 26/27 的原生 Swift 歌词播放器。保留 LyricsX 的菜单栏、搜索、导入导出和播放器控制，同时重做播放同步、缓存、悬浮窗和设置界面。
 
+<p>
+  <img src="docs/img/icon.png" width="128" alt="LyricsX 图标">
+</p>
 
-<img src="docs/img/icon.png" width="128px">
+## 功能
 
-Ultimate lyrics app for macOS.
+- 支持 Apple Music、Spotify，以及 MediaRemote 能识别的其他播放器。
+- Apple Music 读取当前歌曲、封面、播放进度和内嵌歌词；Spotify 和系统媒体通知提供封面回退。
+- 同时搜索 LRCLIB、网易云音乐、QQ 音乐、酷狗和 Musixmatch，并支持来源排序。
+- “双语优先”开关：自动选择精确歌名、有时间轴和双语的最佳版本。
+- 原生液态玻璃悬浮窗：锁定、解锁、点击穿透、鼠标悬停显示、隐藏和自由拖动。
+- 悬浮窗位置、大小、字号、透明度、翻译和下一句显示方式会被保存。
+- Apple Music 风格的歌词切换、模糊淡入淡出、逐字高亮和响应式布局。
+- 菜单栏播放控制、歌词偏移、搜索、重新搜索、Finder 定位、错误歌词停用、资料库和 Apple Music 写入。
+- 继续读取已有 `.lrcx`、`.lrc` 和纯文本缓存；联网搜索结果默认保存为通用 `.lrc`。
 
-[LyricsX for iOS](https://github.com/ddddxxx/LyricsX-iOS) and [lyricsx-cli for Linux](https://github.com/ddddxxx/lyricsx-cli) is in early development.
+## 安装
 
-## Installation
+从 [Releases](https://github.com/wzk112/LyricsX/releases) 下载 `LyricsX-2.0.0.zip`，解压后将 `LyricsX.app` 拖到 `/Applications`。
 
-### Homebrew
+本次包使用本机 ad-hoc 签名，没有 Developer ID 公证票据。首次打开时如果 macOS 提示无法验证开发者：
 
+1. 在 Finder 中双击一次 LyricsX。
+2. 打开“系统设置 → 隐私与安全性”，点击“仍要打开”。
+3. 如果系统仍提示应用已损坏，重新下载并解压；必要时执行：
+
+   ```sh
+   xattr -dr com.apple.quarantine /Applications/LyricsX.app
+   ```
+
+完整的安装、签名和缓存迁移说明见 [`docs/releases/v2.0.0.md`](docs/releases/v2.0.0.md)。
+
+## 播放器权限
+
+第一次读取 Apple Music 或 Spotify 时，macOS 可能要求允许 LyricsX 自动化控制播放器。允许后重启 LyricsX 即可。也可以在“系统设置 → 隐私与安全性 → 自动化”中检查权限。
+
+如果自动模式没有找到正在播放的歌曲，可在“设置”中选择 Apple Music 或 Spotify。Apple Music 的本地歌曲还会读取文件位置和内嵌歌词；没有内嵌歌词时会继续使用联网搜索。
+
+## 缓存和歌词格式
+
+默认缓存目录是 `~/Music/LyricsX`，可以在“设置”中选择已有目录。应用会优先读取磁盘中的现有 `.lrc`、`.lrcx` 文件，选择另一份搜索结果后会更新原文件，不产生重复缓存。
+
+本次迁移已将原缓存中的 918 个 `.lrcx` 转换为标准 `.lrc`，原文件保存在缓存目录同级的日期备份目录中（例如 `~/Music/LyricsX-lrcx-backup-YYYY-MM-DD`）。
+
+标准 LRC 保留行级时间戳、原文、翻译和偏移；LRCX 特有的逐字 `tt` 标记不写入 LRC。已有 LRCX 仍可读取和显示逐字动画。
+
+## 从源码构建
+
+需要 macOS 26 或更高版本以及 Swift 6.2+：
+
+```sh
+swift test
+./scripts/build.sh release
+open build/LyricsX.app
 ```
-brew tap brewforge/extras
-brew install brewforge/extras/lyricsx-mxiris
+
+`scripts/build.sh release` 会构建 App、复制 MediaRemote 组件、生成图标、使用 ad-hoc 签名并执行严格签名校验。默认签名身份为 `-`；正式公开分发应在本机配置 Developer ID、Hardened Runtime 和 notarization。
+
+将旧 LRCX 缓存转换为 LRC：
+
+```sh
+swift run LyricsXConverter ~/Music/LyricsX
 ```
 
-### Manual
+转换器会先验证输出、保留备份，只有写入成功后才移除原 `.lrcx`。
 
-Download from [releases](https://github.com/MxIris-LyricsX-Project/LyricsX/releases).
+## 项目结构
 
-To use **Musixmatch** as lyrics source, you need to follow the steps provided [here](https://gist.github.com/TrueMyst/0461aea999e347182486934fd83a4cf9) or [here](https://spicetify.app/docs/faq#sometimes-popup-lyrics-andor-lyrics-plus-seem-to-not-work) to obtain a **usertoken** and fill it in LyricsX's preferences.
+```text
+Sources/LyricsXCore       播放快照、歌词模型、时间轴和身份校验
+Sources/LyricsXServices   播放器桥接、歌词搜索、缓存和编码
+Sources/LyricsXApp        SwiftUI 主窗口、设置、菜单栏和悬浮窗
+Sources/LyricsXConverter  LRCX 到标准 LRC 的安全转换器
+Tests/                    时间轴、缓存、来源优先级、播放器和窗口回归测试
+Legacy/LyricsX            原 LyricsX 项目
+Legacy/LyricsXPackage     原 LyricsXPackage 项目
+```
 
-### Requirements
+## 验证
 
-- macOS 11+
+当前版本通过 66 项 Swift 回归测试，覆盖播放进度、跳转、切歌、歌词搜索、来源排序、双语优先、缓存替换、LRC 转换、封面 data URL、Apple Music 纯文本内嵌歌词、悬浮窗拖动和点击穿透。
 
-## Features
+详细修复记录见 [`docs/modernization/REGRESSION_FIXES_2026-09-11.md`](docs/modernization/REGRESSION_FIXES_2026-09-11.md)。
 
-- Work perfectly with your favorite music players. [List of supported players](https://github.com/ddddxxx/MusicPlayer#supported-players)
-- Automatically search & download live lyrics from various lyrics sources. [List of supported sources](https://github.com/ddddxxx/LyricsKit#supported-sources)
-- Display lyrics on desktop and menubar. you can customize font, color and position.
-- Adjust lyrics offset on status menu.
-- Navigate the song with lyrics - Double click a line to jump to specific position.
-- Drag & Drop to import/export lyrics file.
-- Auto launch & quit with music player.
-- Automatic conversion between Traditional Chinese and Simplified Chinese.
+## 致谢和许可证
 
-### Lyrics Editor
+歌词解析和媒体组件基于 [LyricsKit](https://github.com/MxIris-LyricsX-Project/LyricsKit) 与 [mediaremote-adapter](https://github.com/MxIris-LyricsX-Project/mediaremote-adapter)。原项目代码和本重构版均遵循仓库中的 [MPL-2.0 LICENSE](LICENSE)。
 
-LyricsX use custom lyrics file format "LRCX" which support word time tag, multi-language translation and more. Currently there's no official LRCX editor. You can use [Lrcx_Creator](https://github.com/Doublefire-Chen/Lrcx_Creator) for now (see [#544](https://github.com/ddddxxx/LyricsX/issues/544), thanks to [@Doublefire-Chen](https://github.com/Doublefire-Chen)). Or use normal LRC editor, as LRCX is compatible with LRC.
-
-## Screenshot
-
-<img src="docs/img/desktop_lyrics.gif" width="480px">
-
-<img src="docs/img/preview_1.jpg" width="1280px">
-
-<img src="docs/img/preview_2.jpg" width="1280px">
-
-<img src="docs/img/preview_3.jpg" width="1280px">
-
-## Credit
-
-#### Components
-
-- [LyricsKit](https://github.com/ddddxxx/LyricsKit)
-- [MusicPlayer](https://github.com/ddddxxx/MusicPlayer)
-
-#### Open Source Libraries
-
-- [SwiftyOpenCC](https://github.com/ddddxxx/SwiftyOpenCC)
-- [GenericID](https://github.com/ddddxxx/GenericID)
-- [SwiftCF](https://github.com/ddddxxx/SwiftCF)
-- [Regex](https://github.com/ddddxxx/Regex)
-- [Semver](https://github.com/ddddxxx/Semver)
-- [TouchBarHelper](https://github.com/ddddxxx/TouchBarHelper)
-- [CombineX](https://github.com/cx-org/CombineX)
-- [SnapKit](https://github.com/SnapKit/SnapKit)
-- [MASShortcut](https://github.com/shpakovski/MASShortcut)
-- [Sparkle](https://github.com/sparkle-project/Sparkle)
-- [Then](https://github.com/devxoul/Then)
-
-#### Special Thanks
-
-- [Lyrics Project](https://github.com/MichaelRow/Lyrics)
-
-
-## ⚠️ Disclaimer
-
-All lyrics are property and copyright of their owners.
+歌词内容的版权归其权利人所有。
