@@ -195,12 +195,13 @@ private let overlayLyrics = LyricsDocument(title: "Overlay Song", artist: "Artis
         #expect(prefs.moveSource("QQMusic", before: "LRCLIB"))
         #expect(!prefs.moveSource("Unknown", before: "LRCLIB"))
         prefs.preferBilingual = false
+        prefs.preferWordTiming = false
         prefs.strictLyricsMatching = false
         let restored = Preferences(defaults: defaults)
         #expect(!restored.showMenuBarIcon && restored.showMenubarLyrics && !restored.combinedMenubarLyrics)
         #expect(restored.translationFontSize == 19 && restored.nextLineFontSize == 15)
         #expect(restored.overlaySecondaryMode == "both")
         #expect(restored.sourceOrder == ["NetEase", "QQMusic", "LRCLIB", "Kugou", "Musixmatch"])
-        #expect(!restored.preferBilingual && !restored.strictLyricsMatching && restored.disabledSources.contains("Kugou"))
+        #expect(!restored.preferBilingual && !restored.preferWordTiming && !restored.strictLyricsMatching && restored.disabledSources.contains("Kugou"))
     }
 }

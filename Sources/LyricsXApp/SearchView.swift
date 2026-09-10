@@ -35,7 +35,10 @@ struct SearchView: View {
                             if let first = candidate.document.lines.first(where: { !$0.text.isEmpty }) { Text(first.text).font(.caption).lineLimit(1).foregroundStyle(.tertiary) }
                         }
                         Spacer()
-                        if candidate.document.hasTranslation { Text("双语").font(.caption2).foregroundStyle(.secondary) }
+                        HStack(spacing: 6) {
+                            if candidate.document.hasWordTiming { searchTag("逐字") }
+                            if candidate.document.hasTranslation { searchTag("双语") }
+                        }
                         Button("使用") {
                             guard model.session.track?.id == trackID else { error = "歌曲已切换，请重新搜索。"; return }
                             model.session.use(candidate.document); dismiss()
@@ -48,6 +51,11 @@ struct SearchView: View {
             .onAppear { query = [model.session.track?.title, model.session.track?.artist].compactMap { $0 }.joined(separator: " "); trackID = model.session.track?.id; results = model.session.candidates }
             .onDisappear { searchTask?.cancel(); deadline?.cancel() }
             .onChange(of: model.session.track?.id) { _, _ in searchTask?.cancel(); deadline?.cancel(); searching = false; results = []; error = "歌曲已切换，请重新搜索。" }
+    }
+    private func searchTag(_ title: String) -> some View {
+        Text(title).font(.caption2.weight(.medium)).foregroundStyle(.secondary)
+            .padding(.horizontal, 7).padding(.vertical, 3)
+            .background(.quaternary.opacity(0.65), in: .capsule)
     }
     private func search() {
         searchTask?.cancel(); deadline?.cancel()

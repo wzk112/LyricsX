@@ -32,6 +32,7 @@ final class Preferences {
     var disabledSources: [String] { didSet { save("disabledSources", disabledSources) } }
     var sourceOrder: [String] { didSet { save("sourceOrder", sourceOrder) } }
     var preferBilingual: Bool { didSet { save("preferBilingual", preferBilingual) } }
+    var preferWordTiming: Bool { didSet { save("preferWordTiming", preferWordTiming) } }
     var strictLyricsMatching: Bool { didSet { save("strictLyricsMatching", strictLyricsMatching) } }
     var directory: URL
     var launchAtLogin = SMAppService.mainApp.status == .enabled
@@ -68,6 +69,7 @@ final class Preferences {
         disabledSources = d.stringArray(forKey: "disabledSources") ?? []
         sourceOrder = SourceConfiguration.normalizedOrder(d.stringArray(forKey: "sourceOrder") ?? [])
         preferBilingual = d.object(forKey: "preferBilingual") as? Bool ?? true
+        preferWordTiming = d.object(forKey: "preferWordTiming") as? Bool ?? true
         strictLyricsMatching = d.object(forKey: "strictLyricsMatching") as? Bool ?? true
         directory = CacheLocation.resolve()
     }
@@ -113,6 +115,7 @@ final class Preferences {
         config.enabled = Set(SourceConfiguration.defaultOrder).subtracting(disabled)
         config.sourceOrder = SourceConfiguration.normalizedOrder(UserDefaults.standard.stringArray(forKey: "sourceOrder") ?? [])
         config.preferBilingual = UserDefaults.standard.object(forKey: "preferBilingual") as? Bool ?? true
+        config.preferWordTiming = UserDefaults.standard.object(forKey: "preferWordTiming") as? Bool ?? true
         config.strictMatching = UserDefaults.standard.object(forKey: "strictLyricsMatching") as? Bool ?? true
         config.musixmatchToken = TokenStore.read()
         return config

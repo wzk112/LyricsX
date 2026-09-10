@@ -7,6 +7,7 @@ public struct SourceConfiguration: Sendable {
     public var enabled: Set<String> = ["LRCLIB", "NetEase", "QQMusic", "Kugou"]
     public var sourceOrder: [String] = defaultOrder
     public var preferBilingual = true
+    public var preferWordTiming = true
     /// Keep the automatic result conservative by default. When disabled, a
     /// synchronized result with an exact title can still be used when a player
     /// or provider omits or formats artist and duration metadata differently.
@@ -30,6 +31,7 @@ public struct SourceConfiguration: Sendable {
         // Lexicographic priorities: title match > timing > bilingual > source >
         // small quality differences. Keep network scores below local cache 999.
         return 60 + (exactTitle ? 400 : 0) + (document.isSynced ? 200 : 0)
+            + (preferWordTiming && document.hasWordTiming ? 150 : 0)
             + (preferBilingual && document.hasTranslation ? 100 : 0) + sourceBonus + match / 100
     }
 

@@ -161,8 +161,9 @@ struct PreferencesView: View {
         case .sources:
             settingsGroup("版本偏好") {
                 Toggle("双语优先", isOn: Bindable(prefs).preferBilingual)
+                Toggle("逐字优先", isOn: Bindable(prefs).preferWordTiming)
                 Toggle("严格匹配", isOn: Bindable(prefs).strictLyricsMatching)
-                Text("开启时会校验歌名、歌手和时长；关闭后会在没有严格结果时接受歌名完全相同、但歌手或时长缺失/格式不同的同步歌词。严格结果、双语偏好和来源顺序仍优先。")
+                Text("逐字优先会在歌曲匹配且有时间轴时优先选择逐字版本；双语优先和来源排序会继续参与选择。严格匹配开启时会校验歌名、歌手和时长；关闭后会在没有严格结果时接受歌名完全相同、但歌手或时长缺失/格式不同的同步歌词。")
                     .font(.caption).foregroundStyle(.secondary)
             }
             settingsGroup("来源优先级") {

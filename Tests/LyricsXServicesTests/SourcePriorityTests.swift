@@ -24,6 +24,16 @@ private func version(_ source: String, translation: String? = nil) -> LyricsDocu
     #expect(config.selectionScore(bilingual, for: rankingTrack) > config.selectionScore(plain, for: rankingTrack))
 }
 
+@Test func wordTimingPreferenceChangesTheWinner() {
+    var config = SourceConfiguration()
+    let bilingual = version("LRCLIB", translation: "你好")
+    var wordTimed = version("NetEase")
+    wordTimed.lines[0].words = [.init(text: "Hello", start: 1, end: 2)]
+    #expect(config.selectionScore(wordTimed, for: rankingTrack) > config.selectionScore(bilingual, for: rankingTrack))
+    config.preferWordTiming = false
+    #expect(config.selectionScore(bilingual, for: rankingTrack) > config.selectionScore(wordTimed, for: rankingTrack))
+}
+
 @Test func sourcePreferencesDoNotPromoteWrongSongsOrLoseSynchronization() {
     let config = SourceConfiguration()
     var wrong = version("LRCLIB", translation: "你好")

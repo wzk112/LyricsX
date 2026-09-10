@@ -10,8 +10,8 @@
 
 - 支持 Apple Music、Spotify，以及 MediaRemote 能识别的其他播放器。
 - Apple Music 读取当前歌曲、封面、播放进度和内嵌歌词；Spotify 和系统媒体通知提供封面回退。
-- 同时搜索 LRCLIB、网易云音乐、QQ 音乐、酷狗和 Musixmatch，并支持来源排序。
-- “双语优先”和“严格匹配”开关：严格模式可校验歌名、歌手和时长；关闭后会在没有严格结果时回退到元数据不完整但标题可信的同步歌词。
+- 同时搜索 LRCLIB、网易云音乐、QQ 音乐、酷狗和 Musixmatch，并支持来源排序；搜索结果会标记逐字与双语版本。
+- “双语优先”“逐字优先”和“严格匹配”开关：严格模式可校验歌名、歌手和时长；关闭后会在没有严格结果时回退到元数据不完整但标题可信的同步歌词。
 - 原生液态玻璃悬浮窗：锁定、解锁、点击穿透、鼠标悬停显示、隐藏和自由拖动。
 - 悬浮窗位置、大小、字号、透明度、翻译和下一句显示方式会被保存；搜不到歌词、纯音乐和无有效填词时自动隐藏。
 - Apple Music 风格的歌词切换、模糊淡入淡出、逐字高亮和响应式布局。
@@ -20,7 +20,7 @@
 
 ## 安装
 
-从 [Releases](https://github.com/wzk112/LyricsX/releases) 下载最新的 `LyricsX-2.0.3.zip`，解压后将 `LyricsX.app` 拖到 `/Applications`。
+从 [Releases](https://github.com/wzk112/LyricsX/releases) 下载最新的 `LyricsX-2.0.4.zip`，解压后将 `LyricsX.app` 拖到 `/Applications`。
 
 本次包使用本机 ad-hoc 签名，没有 Developer ID 公证票据。首次打开时如果 macOS 提示无法验证开发者：
 
@@ -32,7 +32,7 @@
    xattr -dr com.apple.quarantine /Applications/LyricsX.app
    ```
 
-完整的安装、签名和版本说明见 [`docs/releases/v2.0.3.md`](docs/releases/v2.0.3.md)。
+完整的安装、签名和版本说明见 [`docs/releases/v2.0.4.md`](docs/releases/v2.0.4.md)。
 
 ## 播放器权限
 
