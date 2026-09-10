@@ -27,3 +27,15 @@ func liveSourceSmoke() async throws {
     #expect(!sources.isEmpty)
     #expect(!FileManager.default.fileExists(atPath: directory.path))
 }
+
+@Test func embeddedPlainLyricsAreUsedBeforeNetworkSearch() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = LyricsStore(cache: LyricsCache(directory: directory))
+    let track = Track(playerID: "com.apple.Music", playerName: "Apple Music", title: "Song", embeddedLyrics: "first line\nsecond line")
+    var results: [LyricCandidate] = []
+    for try await result in store.lyrics(for: track, forceRefresh: false) { results.append(result) }
+    #expect(results.count == 1)
+    #expect(results.first?.document.plainText == "first line\nsecond line")
+    #expect(results.first?.score == 999)
+}

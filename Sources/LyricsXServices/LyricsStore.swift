@@ -45,7 +45,7 @@ public final class LyricsStore: LyricsRepository, Sendable {
                     if let cached = await cache.load(for: track) {
                         continuation.yield(LyricCandidate(document: cached, score: 1000)); continuation.finish(); return
                     }
-                    if let embedded = track.embeddedLyrics, let doc = try? LyricsCodec.parse(embedded), doc.isSynced {
+                    if let embedded = track.embeddedLyrics, let doc = try? LyricsCodec.parse(embedded), doc.isSynced || doc.plainText?.isEmpty == false {
                         continuation.yield(LyricCandidate(document: doc, score: 999)); continuation.finish(); return
                     }
                     if let local = Self.localLyrics(track: track, directory: configuration().legacyDirectory) {

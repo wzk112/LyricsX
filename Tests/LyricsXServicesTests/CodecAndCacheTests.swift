@@ -122,6 +122,11 @@ import LyricsXCore
     let snapshot = payload.snapshot(now: 50, wallTime: 1001)
     #expect(snapshot.position == 11); #expect(snapshot.track?.duration == 180)
 }
+@Test func systemPayloadDecodesDataURIArtwork() throws {
+    let json = #"{"title":"Song","artist":"Artist","artworkDataBase64":"data:image/jpeg;base64,aGVsbG8="}"#
+    let payload = try JSONDecoder().decode(SystemMediaPayload.self, from: Data(json.utf8))
+    #expect(payload.snapshot(now: 0).track?.artworkData == Data("hello".utf8))
+}
 @Test func oldValidMediaTimestampAdvancesBeyondThreeSeconds() throws {
     let json = #"{"title":"Song","artist":"Artist","isPlaying":true,"durationMicros":180000000,"elapsedTimeMicros":10000000,"timestampEpochMicros":980000000}"#
     let payload = try JSONDecoder().decode(SystemMediaPayload.self, from: Data(json.utf8))

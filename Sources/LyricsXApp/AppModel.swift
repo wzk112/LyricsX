@@ -217,7 +217,13 @@ final class AppModel {
         guard identity != artworkIdentity || track?.artworkData != artworkBytes else { return }
         artworkIdentity = identity; artworkBytes = track?.artworkData; artworkTask?.cancel(); artwork = nil
         if let data = track?.artworkData { artwork = Self.decodeArtwork(data); return }
-        guard let url = track?.artworkURL, url.scheme == "https" else { return }
+        guard let originalURL = track?.artworkURL,
+              let scheme = originalURL.scheme?.lowercased(), scheme == "https" || scheme == "http" else { return }
+        var url = originalURL
+        if scheme == "http", var components = URLComponents(url: originalURL, resolvingAgainstBaseURL: false) {
+            components.scheme = "https"
+            url = components.url ?? originalURL
+        }
         artworkTask = Task { [weak self] in
             do {
                 let (data, _) = try await URLSession.shared.data(from: url)

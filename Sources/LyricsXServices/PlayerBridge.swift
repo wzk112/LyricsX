@@ -44,7 +44,7 @@ public struct SystemMediaPayload: Decodable, Sendable {
         let duration = (durationMicros ?? 0) / 1_000_000
         // Metadata identity is stable even if a source rotates its numeric ID with every lyric.
         let track = Track(playerID: playerID, playerName: applicationName ?? "正在播放", title: title, artist: artist, album: album ?? "",
-                          duration: duration, artworkData: artworkDataBase64.flatMap { Data(base64Encoded: $0) })
+                          duration: duration, artworkData: artworkDataBase64.flatMap(Self.decodeArtwork))
         var position = max(0, (elapsedTimeMicros ?? 0) / 1_000_000)
         if isPlaying == true, let timestampEpochMicros {
             let anchorAge = max(0, wallTime - timestampEpochMicros / 1_000_000)
@@ -62,6 +62,16 @@ public struct SystemMediaPayload: Decodable, Sendable {
             playbackStateIsReliable: isPlaying != nil
         )
     }
+
+    private static func decodeArtwork(_ value: String) -> Data? {
+        let payload: String
+        if let separator = value.firstIndex(of: ","), value[..<separator].contains("base64") {
+            payload = String(value[value.index(after: separator)...])
+        } else {
+            payload = value
+        }
+        return Data(base64Encoded: payload, options: [.ignoreUnknownCharacters])
+    }
 }
 
 @MainActor
@@ -77,6 +87,8 @@ public final class PlayerBridge {
     private var commandQueue: [PlayerCommand] = []
     private var observers: [NSObjectProtocol] = []
     private var latestScriptID = ""
+    private var artworkCacheID = ""
+    private var artworkCacheData: Data?
     private var scriptTarget: String?
     public init() {}
     public func start() {
@@ -98,7 +110,7 @@ public final class PlayerBridge {
         commandTask?.cancel(); commandTask = nil; commandQueue.removeAll()
         for token in observers { DistributedNotificationCenter.default().removeObserver(token) }; observers = []
     }
-    public func restart() { stop(); latestScriptID = ""; start() }
+    public func restart() { stop(); latestScriptID = ""; artworkCacheID = ""; artworkCacheData = nil; start() }
     public func refresh() {
         guard pollTask == nil, commandTask == nil else { return }
         let generation = revision
@@ -250,7 +262,7 @@ public final class PlayerBridge {
           const id = String(safe(() => t.\(spotify ? "id" : "persistentID")(), ''));
           return JSON.stringify({title:safe(() => t.name(), ''),artist:safe(() => t.artist(), ''),album:safe(() => t.album(), ''),id:id,
             duration:safe(() => t.duration(),0)/\(spotify ? "1000" : "1"),position:safe(() => app.playerPosition(),0),playing:safe(() => app.playerState(),'')==='playing',
-            artwork:\(spotify ? "safe(() => t.artworkUrl(), '')" : "''"),lyrics:\(spotify ? "''" : "id !== argv[0] ? safe(() => t.lyrics(), '') : null"),location:\(spotify ? "''" : "safe(() => t.location().toString(), '')")});
+            artwork:\(spotify ? "safe(() => t.artworkUrl(), '')" : "''"),lyrics:\(spotify ? "''" : "safe(() => t.lyrics(), '')"),location:\(spotify ? "''" : "safe(() => t.location().toString(), '')")});
         }
         """
         let started = ProcessInfo.processInfo.systemUptime
@@ -258,10 +270,16 @@ public final class PlayerBridge {
         guard output.status == 0 else { throw BridgeError.automation }
         let item = try JSONDecoder().decode(ScriptRecord.self, from: output.data)
         guard let title = item.title, !title.isEmpty else { return PlaybackSnapshot(track: nil, position: 0, isPlaying: false) }
-        latestScriptID = item.id ?? ""
-        let track = Track(playerID: target, playerName: spotify ? "Spotify" : "Apple Music", persistentID: item.id ?? "", title: title,
+        let persistentID = (item.id?.isEmpty == false ? item.id! : [title, item.artist ?? "", item.album ?? ""].joined(separator: "\u{1f}"))
+        latestScriptID = persistentID
+        if !spotify, artworkCacheID != persistentID {
+            artworkCacheID = persistentID
+            artworkCacheData = await readMusicArtwork(expectedID: item.id ?? "")
+        }
+        let track = Track(playerID: target, playerName: spotify ? "Spotify" : "Apple Music", persistentID: persistentID, title: title,
                           artist: item.artist ?? "", album: item.album ?? "", duration: item.duration ?? 0,
-                          artworkURL: item.artwork.flatMap(URL.init(string:)), localFileURL: item.location.flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }, embeddedLyrics: item.lyrics)
+                          artworkData: artworkCacheData,
+                          artworkURL: item.artwork.flatMap(URL.init(string:)), localFileURL: Self.fileURL(item.location), embeddedLyrics: item.lyrics)
         let finished = ProcessInfo.processInfo.systemUptime
         let sampleTime = (started + finished) / 2
         return PlaybackSnapshot(
@@ -272,6 +290,43 @@ public final class PlayerBridge {
             positionIsReliable: item.position != nil,
             playbackStateIsReliable: item.playing != nil
         )
+    }
+    private static func fileURL(_ value: String?) -> URL? {
+        guard let value, !value.isEmpty else { return nil }
+        if value.hasPrefix("file://") { return URL(string: value) }
+        return URL(fileURLWithPath: value)
+    }
+    private func readMusicArtwork(expectedID: String) async -> Data? {
+        let outputURL = FileManager.default.temporaryDirectory.appendingPathComponent("lyricsx-artwork-\(UUID().uuidString).bin")
+        let source = #"""
+        on run argv
+          set outputPath to item 1 of argv
+          set expectedID to item 2 of argv
+          tell application "Music"
+            if not running then return ""
+            set currentTrack to current track
+            try
+              if expectedID is not "" and (persistent ID of currentTrack as text) is not expectedID then return ""
+            end try
+            if (count of artworks of currentTrack) is 0 then return ""
+            set rawData to raw data of artwork 1 of currentTrack
+            set outputFile to open for access (POSIX file outputPath) with write permission
+            try
+              set eof outputFile to 0
+              write rawData to outputFile
+              close access outputFile
+            on error
+              try
+                close access outputFile
+              end try
+            end try
+          end tell
+        end run
+        """#
+        defer { try? FileManager.default.removeItem(at: outputURL) }
+        guard let result = try? await ProcessRunner.run("/usr/bin/osascript", arguments: ["-e", source, outputURL.path, expectedID]), result.status == 0,
+              let data = try? Data(contentsOf: outputURL), !data.isEmpty, data.count < 8_000_000 else { return nil }
+        return data
     }
     enum BridgeError: LocalizedError {
         case unavailable, automation, bundle, wrongTrack, lyricsWrite
