@@ -49,6 +49,23 @@ private func version(_ source: String, translation: String? = nil) -> LyricsDocu
     #expect(config.fallbackSelectionScore(staleDuration, for: rankingTrack) == nil)
 }
 
+@Test func relaxedMatchingCanRecoverSynchronizedLyricsWithIncompleteProviderMetadata() {
+    var config = SourceConfiguration()
+    var incomplete = version("NetEase", translation: "你好")
+    incomplete.artist = ""
+    incomplete.duration = 999
+    #expect(config.selectionScore(incomplete, for: rankingTrack) == 0)
+    #expect(config.fallbackSelectionScore(incomplete, for: rankingTrack) == nil)
+    #expect(config.relaxedSelectionScore(incomplete, for: rankingTrack) == nil)
+
+    config.strictMatching = false
+    #expect(config.relaxedSelectionScore(incomplete, for: rankingTrack) != nil)
+    incomplete.title = "Song Live"
+    #expect(config.relaxedSelectionScore(incomplete, for: rankingTrack) == nil)
+    incomplete.artist = "Artist"
+    #expect(config.relaxedSelectionScore(incomplete, for: rankingTrack) != nil)
+}
+
 @Test func blankAndDuplicateTranslationsDoNotCountAsBilingual() {
     #expect(!version("NetEase", translation: " \n ").hasTranslation)
     #expect(!version("NetEase", translation: "Hello").hasTranslation)

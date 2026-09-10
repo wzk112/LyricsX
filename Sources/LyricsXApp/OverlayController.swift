@@ -47,6 +47,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     var isRenderingLyrics: Bool { lastVisible && !hoverHidden }
     var controlsView: NSView { controls }
+    private var positionDefaultsKey: String? { frameAutosaveName.map { "LyricsX.OverlayPosition.\($0)" } }
 
     init(model: AppModel, frameAutosaveName: String? = "LyricsXModernOverlay") {
         self.model = model
@@ -114,7 +115,15 @@ final class OverlayController: NSObject, NSWindowDelegate {
         controlPanel.setAccessibilityLabel("悬浮歌词控制")
         controlPanel.setAccessibilityParent(panel)
         panel.setAccessibilityChildren([content])
-        if !(frameAutosaveName.map { panel.setFrameUsingName($0) } ?? false), let screen = NSScreen.main {
+        let restoredPosition: Bool
+        if let key = positionDefaultsKey,
+           let value = UserDefaults.standard.string(forKey: key) {
+            panel.setFrameOrigin(NSPointFromString(value))
+            restoredPosition = true
+        } else {
+            restoredPosition = frameAutosaveName.map { panel.setFrameUsingName($0) } ?? false
+        }
+        if !restoredPosition, let screen = NSScreen.main {
             panel.setFrameOrigin(NSPoint(x: screen.visibleFrame.midX - panel.frame.width / 2, y: screen.visibleFrame.minY + 90))
         }
         screenObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
@@ -150,7 +159,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         if model.session.isPlaying && !wasPlaying { explicitShowWhilePaused = false }
         wasPlaying = model.session.isPlaying
         let autoHidden = prefs.hideWhenPaused && !model.session.isPlaying && !explicitShowWhilePaused
-        let visible = prefs.overlayVisible && !autoHidden
+        let visible = prefs.overlayVisible && !autoHidden && hasDisplayableLyrics
         if visible != lastVisible {
             lastVisible = visible
             if visible { panel.orderFrontRegardless() } else { panel.orderOut(nil) }
@@ -274,6 +283,12 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     private func saveFrame() {
         if let frameAutosaveName { panel.saveFrame(usingName: frameAutosaveName) }
+        if let key = positionDefaultsKey { UserDefaults.standard.set(NSStringFromPoint(panel.frame.origin), forKey: key) }
+    }
+
+    private var hasDisplayableLyrics: Bool {
+        guard let document = model.session.document, document.isSynced, !document.isInstrumental else { return false }
+        return document.lines.contains { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     }
 }
 

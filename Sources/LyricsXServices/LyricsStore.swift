@@ -7,6 +7,10 @@ public struct SourceConfiguration: Sendable {
     public var enabled: Set<String> = ["LRCLIB", "NetEase", "QQMusic", "Kugou"]
     public var sourceOrder: [String] = defaultOrder
     public var preferBilingual = true
+    /// Keep the automatic result conservative by default. When disabled, a
+    /// synchronized result with an exact title can still be used when a player
+    /// or provider omits or formats artist and duration metadata differently.
+    public var strictMatching = true
     public var musixmatchToken: String?
     public var legacyDirectory: URL?
     public init() {}
@@ -46,6 +50,30 @@ public struct SourceConfiguration: Sendable {
         let sourceBonus = order.firstIndex(of: document.source).map { Double(order.count - $0) } ?? 0
         return 50 + sourceBonus
     }
+
+    /// A deliberately lower-priority fallback for sources with incomplete
+    /// metadata. Strict candidates and exact title/artist candidates above
+    /// always win; this path is only used after they have all failed.
+    public func relaxedSelectionScore(_ document: LyricsDocument, for track: Track) -> Double? {
+        guard !strictMatching, document.isSynced else { return nil }
+        let title = CandidateRanker.normalized(track.title)
+        let candidateTitle = CandidateRanker.normalized(document.title)
+        guard title.count >= 3, candidateTitle.count >= 3 else { return nil }
+        let exactTitle = title == candidateTitle
+        let compatibleTitle = exactTitle || title.contains(candidateTitle) || candidateTitle.contains(title)
+        guard compatibleTitle else { return nil }
+
+        let artist = CandidateRanker.normalized(track.artist)
+        let candidateArtist = CandidateRanker.normalized(document.artist)
+        let compatibleArtist = artist.isEmpty || (!candidateArtist.isEmpty &&
+            (artist == candidateArtist || artist.contains(candidateArtist) || candidateArtist.contains(artist)))
+        // A partial title must retain an artist match; an exact title is useful
+        // even when a provider has omitted the artist or reports a variant.
+        guard exactTitle || compatibleArtist else { return nil }
+        let order = Self.normalizedOrder(sourceOrder)
+        let sourceBonus = order.firstIndex(of: document.source).map { Double(order.count - $0) } ?? 0
+        return (exactTitle ? 42 : 34) + (compatibleArtist ? 3 : 0) + sourceBonus
+    }
 }
 
 public final class LyricsStore: LyricsRepository, Sendable {
@@ -75,6 +103,7 @@ public final class LyricsStore: LyricsRepository, Sendable {
                     let config = configuration()
                     var hasStrictCandidate = false
                     var fallback: LyricCandidate?
+                    var relaxed: LyricCandidate?
                     for try await candidate in results {
                         try Task.checkCancellation()
                         if candidate.score >= 60 {
@@ -83,9 +112,13 @@ public final class LyricsStore: LyricsRepository, Sendable {
                         } else if let score = config.fallbackSelectionScore(candidate.document, for: track),
                                   fallback == nil || score > fallback!.score {
                             fallback = LyricCandidate(document: candidate.document, score: score)
+                        } else if let score = config.relaxedSelectionScore(candidate.document, for: track),
+                                  relaxed == nil || score > relaxed!.score {
+                            relaxed = LyricCandidate(document: candidate.document, score: score)
                         }
                     }
                     if !hasStrictCandidate, let fallback { continuation.yield(fallback) }
+                    else if !hasStrictCandidate, let relaxed { continuation.yield(relaxed) }
                     continuation.finish()
                 } catch { continuation.finish(throwing: error) }
             }

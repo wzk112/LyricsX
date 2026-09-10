@@ -161,7 +161,8 @@ struct PreferencesView: View {
         case .sources:
             settingsGroup("版本偏好") {
                 Toggle("双语优先", isOn: Bindable(prefs).preferBilingual)
-                Text("歌曲匹配且有时间轴时，优先选择带翻译的版本，再按下方来源顺序选择。没有双语歌词时使用单语版本。")
+                Toggle("严格匹配", isOn: Bindable(prefs).strictLyricsMatching)
+                Text("开启时会校验歌名、歌手和时长；关闭后会在没有严格结果时接受歌名完全相同、但歌手或时长缺失/格式不同的同步歌词。严格结果、双语偏好和来源顺序仍优先。")
                     .font(.caption).foregroundStyle(.secondary)
             }
             settingsGroup("来源优先级") {

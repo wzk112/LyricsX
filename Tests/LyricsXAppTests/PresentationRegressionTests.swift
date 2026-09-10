@@ -9,6 +9,10 @@ private struct EmptyRepository: LyricsRepository {
     func save(_ document: LyricsDocument, for track: Track) async throws { }
 }
 
+private let overlayTrack = Track(playerID: "test", playerName: "Test", title: "Overlay Song", artist: "Artist", duration: 180)
+private let overlayLyrics = LyricsDocument(title: "Overlay Song", artist: "Artist", duration: 180,
+    lines: [.init(id: 0, time: 0, text: "Visible lyric")])
+
 @Suite @MainActor struct PresentationRegressionTests {
     @Test func nativeOverlayKeepsControlsClickableDuringPassThroughAndHoverHide() async throws {
         _ = NSApplication.shared
@@ -20,6 +24,8 @@ private struct EmptyRepository: LyricsRepository {
         prefs.hideOverlayOnHover = true
         prefs.reduceMotion = true
         let model = AppModel(repository: EmptyRepository(), preferences: prefs)
+        model.session.accept(.init(track: overlayTrack, position: 1, isPlaying: true), shouldSearch: false)
+        model.session.use(overlayLyrics, persist: false)
         let overlay = OverlayController(model: model, frameAutosaveName: nil)
         defer { overlay.stop(); model.stop() }
         let center = NSPoint(x: overlay.panel.frame.midX, y: overlay.panel.frame.midY)
@@ -73,6 +79,35 @@ private struct EmptyRepository: LyricsRepository {
         #expect(!overlay.panel.isVisible && !overlay.controlPanel.isVisible)
     }
 
+    @Test func overlayOnlyAppearsForTimedNonInstrumentalLyrics() async throws {
+        _ = NSApplication.shared
+        let suite = "LyricsXTests-" + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let prefs = Preferences(defaults: defaults)
+        prefs.hideWhenPaused = false
+        let model = AppModel(repository: EmptyRepository(), preferences: prefs)
+        defer { model.stop() }
+        let overlay = OverlayController(model: model, frameAutosaveName: nil)
+        defer { overlay.stop() }
+        #expect(!overlay.panel.isVisible)
+
+        model.session.accept(.init(track: overlayTrack, position: 1, isPlaying: true), shouldSearch: false)
+        model.session.use(overlayLyrics, persist: false)
+        try await Task.sleep(for: .milliseconds(25))
+        #expect(overlay.panel.isVisible)
+
+        model.session.use(.init(title: "Overlay Song",
+            lines: [.init(id: 0, time: 0, text: "Instrumental")], isInstrumental: true), persist: false)
+        try await Task.sleep(for: .milliseconds(25))
+        #expect(!overlay.panel.isVisible)
+
+        model.session.use(.init(title: "Overlay Song",
+            lines: [.init(id: 0, time: 0, text: "   ")]), persist: false)
+        try await Task.sleep(for: .milliseconds(25))
+        #expect(!overlay.panel.isVisible)
+    }
+
     @Test func overlayPositionSurvivesControllerRecreation() throws {
         _ = NSApplication.shared
         let suite = "LyricsXTests-" + UUID().uuidString
@@ -91,6 +126,7 @@ private struct EmptyRepository: LyricsRepository {
         #expect(abs(second.panel.frame.minX - target.x) < 1)
         #expect(abs(second.panel.frame.minY - target.y) < 1)
         UserDefaults.standard.removeObject(forKey: "NSWindow Frame \(autosaveName)")
+        UserDefaults.standard.removeObject(forKey: "LyricsX.OverlayPosition.\(autosaveName)")
     }
 
     @Test func overlayControlsKeepARecoverableDragState() throws {
@@ -159,11 +195,12 @@ private struct EmptyRepository: LyricsRepository {
         #expect(prefs.moveSource("QQMusic", before: "LRCLIB"))
         #expect(!prefs.moveSource("Unknown", before: "LRCLIB"))
         prefs.preferBilingual = false
+        prefs.strictLyricsMatching = false
         let restored = Preferences(defaults: defaults)
         #expect(!restored.showMenuBarIcon && restored.showMenubarLyrics && !restored.combinedMenubarLyrics)
         #expect(restored.translationFontSize == 19 && restored.nextLineFontSize == 15)
         #expect(restored.overlaySecondaryMode == "both")
         #expect(restored.sourceOrder == ["NetEase", "QQMusic", "LRCLIB", "Kugou", "Musixmatch"])
-        #expect(!restored.preferBilingual && restored.disabledSources.contains("Kugou"))
+        #expect(!restored.preferBilingual && !restored.strictLyricsMatching && restored.disabledSources.contains("Kugou"))
     }
 }
