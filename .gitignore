@@ -1,5 +1,6 @@
 Product
 build/
+dist/
 Scripts/release/bin/
 .DS_Store
 xcuserdata
