@@ -214,6 +214,45 @@ private let overlayLyrics = LyricsDocument(title: "Overlay Song", artist: "Artis
         model.stop()
     }
 
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["LYRICSX_CONTROL_QA"] != nil))
+    func renderControlsOverLightAndDarkBackgrounds() async throws {
+        _ = NSApplication.shared
+        let suite = "LyricsXTests-" + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let prefs = Preferences(defaults: defaults)
+        prefs.overlayVisible = true; prefs.hideWhenPaused = false; prefs.hideOverlayOnHover = false
+        prefs.reduceMotion = true; prefs.overlayBackgroundStrength = 0
+        let model = AppModel(repository: EmptyRepository(), preferences: prefs)
+        model.session.accept(.init(track: overlayTrack, position: 1, isPlaying: false), shouldSearch: false)
+        model.session.use(overlayLyrics, persist: false)
+        let overlay = OverlayController(model: model, frameAutosaveName: nil)
+        let backdrop = NSPanel(contentRect: overlay.panel.frame.insetBy(dx: -20, dy: -20), styleMask: [.borderless], backing: .buffered, defer: false)
+        defer { backdrop.orderOut(nil); overlay.stop(); model.stop() }
+        backdrop.level = overlay.panel.level
+        overlay.panel.onDragActivity?(true)
+        let directory = try #require(ProcessInfo.processInfo.environment["LYRICSX_CONTROL_QA"])
+        try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+        for dark in [false, true] {
+            backdrop.backgroundColor = dark ? NSColor(white: 0.04, alpha: 1) : .white
+            overlay.panel.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            overlay.controlPanel.appearance = overlay.panel.appearance
+            backdrop.orderFrontRegardless(); overlay.panel.orderFrontRegardless()
+            for detached in [false, true] {
+                model.setOverlayClickThrough(detached)
+                try await Task.sleep(for: .milliseconds(100))
+                overlay.refreshAppearance(at: NSPoint(x: overlay.panel.frame.midX, y: overlay.panel.frame.midY))
+                try await Task.sleep(for: .milliseconds(250))
+                let window = detached ? overlay.controlPanel : overlay.panel
+                let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+                let name = "controls-\(dark ? "dark" : "light")-\(detached ? "detached" : "inline").png"
+                process.arguments = ["-x", "-l", String(window.windowNumber), directory + "/" + name]
+                try process.run(); process.waitUntilExit()
+                #expect(process.terminationStatus == 0)
+            }
+        }
+    }
+
     @Test func repeatedArtworkSamplesKeepTheDecodedImageAndTrackChangeClearsIt() throws {
         let model = AppModel(repository: EmptyRepository())
         let bitmap = try #require(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 2, pixelsHigh: 2, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))

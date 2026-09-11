@@ -194,8 +194,11 @@ public struct LyricsDocument: Codable, Hashable, Sendable, Identifiable {
 public struct LyricCandidate: Sendable, Identifiable {
     public var document: LyricsDocument
     public var score: Double
+    public var isProvisional: Bool
     public var id: UUID { document.id }
-    public init(document: LyricsDocument, score: Double) { self.document = document; self.score = score }
+    public init(document: LyricsDocument, score: Double, isProvisional: Bool = false) {
+        self.document = document; self.score = score; self.isProvisional = isProvisional
+    }
 }
 
 public enum LyricsPhase: Equatable, Sendable {

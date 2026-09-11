@@ -240,7 +240,7 @@ private actor FinalVersionGate {
     }
 }
 
-@Test @MainActor func automaticLyricsAppearEarlyKeepLoadingAndCacheOnlyTheBetterFinalVersion() async throws {
+@Test @MainActor func automaticLyricsCheckpointEarlyAndFinalizeTheBetterVersion() async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
     let cache = LyricsCache(directory: directory)
@@ -270,12 +270,13 @@ private actor FinalVersionGate {
     while session.document == nil, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(2)) }
     #expect(session.document?.hasWordTiming == false)
     #expect(session.isSearching && session.phase == .ready)
-    #expect(await cache.load(for: track) == nil)
+    #expect(await cache.load(for: track)?.hasWordTiming == false)
+    #expect(await cache.automaticCandidate(for: track, configuration: "test")?.isProvisional == true)
     await gate.release()
     while session.isSearching, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(2)) }
     #expect(session.document?.hasWordTiming == true)
     #expect(session.candidates.count == 2)
-    while await cache.load(for: track) == nil, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(2)) }
+    while await cache.automaticCandidate(for: track, configuration: "test")?.isProvisional != false, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(2)) }
     #expect(await cache.load(for: track)?.hasWordTiming == true)
     session.reload(forceRefresh: true)
     #expect(session.isSearching)

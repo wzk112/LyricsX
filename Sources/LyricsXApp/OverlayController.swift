@@ -417,16 +417,25 @@ struct OverlayView: View {
 
 private struct OverlayControlStrip: View {
     @Bindable var model: AppModel
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     var body: some View {
         HStack(spacing: 2) {
-            SymbolButton(symbol: "arrow.up.left.and.arrow.down.right", help: "打开主窗口") { model.showMainWindow?() }
-            SymbolButton(symbol: model.preferences.overlayLocked ? "lock.fill" : "lock.open", help: model.preferences.overlayLocked ? "解锁并恢复拖动" : "锁定位置", active: model.preferences.overlayLocked) {
+            SymbolButton(symbol: "arrow.up.left.and.arrow.down.right", help: "打开主窗口", inactiveOpacity: 0.92) { model.showMainWindow?() }
+            SymbolButton(symbol: model.preferences.overlayLocked ? "lock.fill" : "lock.open", help: model.preferences.overlayLocked ? "解锁并恢复拖动" : "锁定位置", active: model.preferences.overlayLocked, inactiveOpacity: 0.92) {
                 model.setOverlayLocked(!model.preferences.overlayLocked)
             }
-            SymbolButton(symbol: model.preferences.overlayClickThrough ? "cursorarrow.slash" : "cursorarrow.rays", help: model.preferences.overlayClickThrough ? "关闭点击穿透" : "开启点击穿透", active: model.preferences.overlayClickThrough) {
+            SymbolButton(symbol: model.preferences.overlayClickThrough ? "cursorarrow.slash" : "cursorarrow.rays", help: model.preferences.overlayClickThrough ? "关闭点击穿透" : "开启点击穿透", active: model.preferences.overlayClickThrough, inactiveOpacity: 0.92) {
                 model.setOverlayClickThrough(!model.preferences.overlayClickThrough)
             }
-            SymbolButton(symbol: "xmark", help: "隐藏悬浮歌词") { model.setOverlayVisible(false) }
-        }.padding(2).glassEffect(.clear, in: .capsule)
+            SymbolButton(symbol: "xmark", help: "隐藏悬浮歌词", inactiveOpacity: 0.92) { model.setOverlayVisible(false) }
+        }
+        .foregroundStyle(.white)
+        .shadow(color: .black.opacity(0.65), radius: 1, y: 1)
+        .padding(2)
+        // A minimum local scrim keeps white controls legible over white pages.
+        // Keep this independent from the user's much lighter lyric glass tint.
+        .background(reduceTransparency ? Color(white: 0.16) : .black.opacity(max(0.52, model.preferences.overlayBackgroundStrength)), in: .capsule)
+        .glassEffect(.clear, in: .capsule)
+        .overlay { Capsule().strokeBorder(.white.opacity(0.16), lineWidth: 0.5).allowsHitTesting(false) }
     }
 }

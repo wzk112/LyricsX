@@ -96,10 +96,11 @@ struct SymbolButton: View {
     let symbol: String
     let help: String
     var active = false
+    var inactiveOpacity = 0.6
     let action: () -> Void
     var body: some View {
         Button(action: action) { Image(systemName: symbol).font(.system(size: 15, weight: .medium)).frame(width: 30, height: 30) }
-            .buttonStyle(.plain).foregroundStyle(active ? .white : .white.opacity(0.6))
+            .buttonStyle(.plain).foregroundStyle(active ? .white : .white.opacity(inactiveOpacity))
             .background(active ? .white.opacity(0.1) : .clear, in: .circle)
             .contentShape(.circle).help(help).accessibilityLabel(help)
     }

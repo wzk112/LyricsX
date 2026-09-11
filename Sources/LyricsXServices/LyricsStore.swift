@@ -17,6 +17,19 @@ public struct SourceConfiguration: Sendable {
     public var legacyDirectory: URL?
     public init() {}
 
+    var selectionKey: String {
+        (Self.normalizedOrder(sourceOrder) + enabled.sorted() + [String(preferBilingual), String(preferWordTiming), String(strictMatching)]).joined(separator: "|")
+    }
+
+    func satisfiesAutomaticPreferences(_ document: LyricsDocument, for track: Track, aliases: [Track]) -> Bool {
+        guard document.isSynced, !document.isLikelyInstrumentalPlaceholder,
+              !preferWordTiming || document.hasWordTiming,
+              !preferBilingual || document.hasTranslation else { return false }
+        return ([track] + aliases).contains {
+            CandidateRanker.equivalentTitle(document.title, $0.title) && CandidateRanker.score(document, for: $0) >= 60
+        }
+    }
+
     public static func normalizedOrder(_ values: [String]) -> [String] {
         var seen: Set<String> = []
         return (values + defaultOrder).filter { defaultOrder.contains($0) && seen.insert($0).inserted }
@@ -128,18 +141,27 @@ public final class LyricsStore: LyricsRepository, Sendable {
         AsyncThrowingStream { continuation in
             let task = Task {
                 if track.playerID == "lyricsx.demo" { continuation.finish(); return }
+                let selectionKey = configuration().selectionKey
+                var checkpoint: LyricCandidate?
                 if !forceRefresh {
-                    if let cached = await cache.load(for: track) {
-                        continuation.yield(LyricCandidate(document: cached, score: 1000)); continuation.finish(); return
+                    if let cached = await cache.automaticCandidate(for: track, configuration: selectionKey) {
+                        if !cached.isProvisional { continuation.yield(cached); continuation.finish(); return }
+                        checkpoint = cached
                     }
-                    if let embedded = track.embeddedLyrics, let doc = try? LyricsCodec.parse(embedded), doc.isSynced || doc.plainText?.isEmpty == false {
+                    if checkpoint == nil, let embedded = track.embeddedLyrics, let doc = try? LyricsCodec.parse(embedded), doc.isSynced || doc.plainText?.isEmpty == false {
                         continuation.yield(LyricCandidate(document: doc, score: 999)); continuation.finish(); return
                     }
-                    if let local = Self.localLyrics(track: track, directory: configuration().legacyDirectory) {
+                    if checkpoint == nil, let local = Self.localLyrics(track: track, directory: configuration().legacyDirectory) {
                         continuation.yield(LyricCandidate(document: local, score: 999)); continuation.finish(); return
                     }
                 }
-                let results = AutomaticSearchResults(continuation)
+                guard !Task.isCancelled else { continuation.finish(); return }
+                let searchID = await cache.beginSearch(for: track)
+                defer { Task { await cache.endSearch(for: track, id: searchID) } }
+                let results = AutomaticSearchResults(continuation) { [cache] candidate in
+                    try? await cache.saveCheckpoint(candidate, for: track, searchID: searchID, configuration: selectionKey)
+                }
+                if let checkpoint { await results.restore(checkpoint) }
                 let firstDisplay = Task {
                     do { try await Task.sleep(for: firstResultDelay) } catch { return }
                     await results.allowEarlyDisplay()
@@ -205,6 +227,7 @@ public final class LyricsStore: LyricsRepository, Sendable {
                                     for try await document in self.searchBackend(query.track, query.keyword, sourceConfig, client) {
                                         guard !Task.isCancelled else { return }
                                         _ = await collector.add(document)
+                                        if await collector.sourceIsSatisfied(source) { break }
                                     }
                                     await collector.completed(source: source, error: nil)
                                 } catch {
@@ -414,6 +437,8 @@ private actor SearchCollector {
     var waiters: [String: CheckedContinuation<Query?, Never>] = [:]
     var catalogDone = false
     let useTrackHints: Bool
+    let isAutomatic: Bool
+    var satisfiedSources: Set<String> = []
     var finished = false
     var successes = 0
     var failures = 0
@@ -421,6 +446,7 @@ private actor SearchCollector {
     init(track: Track, keyword: String?, configuration: SourceConfiguration, continuation: AsyncThrowingStream<LyricCandidate, Error>.Continuation, onSourceUpdate: @escaping @Sendable (SourceSearchStatus) -> Void) {
         self.onSourceUpdate = onSourceUpdate
         self.useTrackHints = LyricsStore.usesTrackHints(track: track, keyword: keyword)
+        self.isAutomatic = keyword == nil
         self.track = track; self.configuration = configuration; self.continuation = continuation
         let queries = LyricsStore.queryKeywords(track: track, keyword: keyword).map { Query(track: track, keyword: $0) }
         for source in configuration.availableSources {
@@ -436,12 +462,14 @@ private actor SearchCollector {
             discovered = addAliases(ArtistAliasEvidence.aliases(in: document, for: track))
             discovered += addAliases(ArtistAliasEvidence.searchTitles(in: document, for: track, aliases: aliases))
         }
+        guard !finished else { return discovered }
         let key = Key(document)
         guard candidates[key] == nil else { return discovered }
         let candidate = LyricCandidate(document: document, score: configuration.bestScore(document, for: track, aliases: aliases))
         candidates[key] = candidate
         continuation.yield(candidate)
-        report(document.source)
+        updateSatisfiedSources()
+        if !finished { report(document.source) }
         return discovered
     }
     @discardableResult func addAliases(_ values: [Track]) -> [Track] {
@@ -452,6 +480,7 @@ private actor SearchCollector {
                 && CandidateRanker.normalized($0.artist) == CandidateRanker.normalized(value.artist) }) else { continue }
             aliases.append(value); added.append(value)
             for source in configuration.availableSources {
+                if satisfiedSources.contains(source) { continue }
                 let queries = LyricsStore.queryKeywords(track: value, keyword: nil).map { Query(track: value, keyword: $0) }
                     .filter { queryKeys[source, default: []].insert($0.key).inserted }
                 queues[source, default: []].insert(contentsOf: queries, at: 0)
@@ -468,8 +497,25 @@ private actor SearchCollector {
                 candidate.score = score; candidates[key] = candidate; continuation.yield(candidate)
             }
         }
+        updateSatisfiedSources()
         return added
     }
+    private func updateSatisfiedSources() {
+        guard isAutomatic else { return }
+        for candidate in candidates.values where !satisfiedSources.contains(candidate.document.source) {
+            if configuration.satisfiesAutomaticPreferences(candidate.document, for: track, aliases: aliases) {
+                satisfiedSources.insert(candidate.document.source)
+                queues[candidate.document.source] = []
+            }
+        }
+        // No other enabled source can outrank an exact, fully preferred result
+        // from the first source. Do not spend the rest of the budget on it.
+        if let first = configuration.availableSources.first, satisfiedSources.contains(first) {
+            finish(timedOut: false)
+            continuation.finish()
+        }
+    }
+    func sourceIsSatisfied(_ source: String) -> Bool { satisfiedSources.contains(source) }
     func begin() { for source in configuration.availableSources { report(source) } }
     func completed(source: String, error: String?) {
         guard !finished else { return }
@@ -481,6 +527,7 @@ private actor SearchCollector {
     func catalogFinished() { catalogDone = true; finishWaitingIfDrained() }
     func nextQuery(source: String) async -> Query? {
         guard !finished, !Task.isCancelled else { return nil }
+        if satisfiedSources.contains(source) { finishWaitingIfDrained(); return nil }
         if queues[source]?.isEmpty == false {
             activeSources.insert(source)
             return queues[source]!.removeFirst()

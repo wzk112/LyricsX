@@ -19,6 +19,7 @@ public final class LyricsSession {
     @ObservationIgnored private var deadlineTask: Task<Void, Never>?
     @ObservationIgnored private var saveTask: Task<Void, Never>?
     @ObservationIgnored private var bestScore = -Double.infinity
+    @ObservationIgnored private var bestIsProvisional = false
     @ObservationIgnored private let searchTimeout: Duration
     @ObservationIgnored private var seekProtectionUntil = 0.0
     @ObservationIgnored private var pendingSeekTarget: Double?
@@ -83,7 +84,7 @@ public final class LyricsSession {
         invalidateSearch()
         guard let track else { document = nil; candidates = []; phase = .idle; currentLineIndex = nil; return }
         if !forceRefresh { document = nil; currentLineIndex = nil }
-        candidates = []; bestScore = -Double.infinity; phase = .loading; isSearching = true
+        candidates = []; bestScore = -Double.infinity; bestIsProvisional = false; phase = .loading; isSearching = true
         let generation = searchGeneration
         let stream = repository.lyrics(for: track, forceRefresh: forceRefresh)
         searchTask = Task { [weak self] in
@@ -93,20 +94,21 @@ public final class LyricsSession {
                     self.candidates.removeAll { $0.id == candidate.id }
                     self.candidates.append(candidate)
                     self.candidates.sort { $0.score > $1.score }
-                    if candidate.score > self.bestScore {
+                    if candidate.score > self.bestScore || (candidate.id == self.document?.id && candidate.score == self.bestScore) {
                         self.bestScore = candidate.score; self.document = candidate.document
+                        self.bestIsProvisional = candidate.isProvisional
                         self.phase = .ready; self.tick()
                     }
                 }
                 guard !Task.isCancelled, let self, self.searchGeneration == generation else { return }
                 self.deadlineTask?.cancel(); self.isSearching = false
                 self.phase = self.document == nil ? .notFound : .ready
-                if self.bestScore < 999 { self.persist() }
+                if self.bestScore < 999 && !self.bestIsProvisional { self.persist() }
             } catch {
                 guard !Task.isCancelled, let self, self.searchGeneration == generation else { return }
                 self.deadlineTask?.cancel(); self.isSearching = false
                 self.phase = self.document == nil ? .failed(error.localizedDescription) : .ready
-                if self.bestScore.isFinite && self.bestScore < 999 { self.persist() }
+                if self.bestScore.isFinite && self.bestScore < 999 && !self.bestIsProvisional { self.persist() }
             }
         }
         deadlineTask = Task { [weak self, searchTimeout] in
@@ -114,7 +116,7 @@ public final class LyricsSession {
             guard let self, self.searchGeneration == generation else { return }
             self.searchTask?.cancel(); self.searchGeneration &+= 1; self.isSearching = false
             self.phase = self.document == nil ? .failed("歌词源响应超时，请重试。") : .ready
-            self.persist()
+            if !self.bestIsProvisional { self.persist() }
         }
     }
     public func use(_ document: LyricsDocument, persist shouldPersist: Bool = true) {
