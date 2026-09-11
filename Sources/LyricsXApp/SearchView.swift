@@ -7,6 +7,8 @@ struct SearchView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
     @State private var previousQuery = ""
+    @State private var previousCompleteSearch = false
+    @State private var completeSearch = false
     @State private var results: [LyricCandidate] = []
     @State private var searching = false
     @State private var retainedPreviousResults = false
@@ -25,6 +27,13 @@ struct SearchView: View {
                 if searching { ProgressView().controlSize(.small) }
                 Button("搜索", action: search).buttonStyle(.glassProminent).disabled(query.trimmingCharacters(in: .whitespaces).isEmpty)
             }.padding(12).background(.quaternary.opacity(0.5), in: .rect(cornerRadius: 14))
+            HStack(spacing: 10) {
+                Toggle("完整搜索", isOn: $completeSearch).toggleStyle(.switch).controlSize(.small)
+                    .onChange(of: completeSearch) { _, _ in search() }
+                Text(completeSearch ? "搜索更多别名和版本，最多等待 40 秒" : "精简重复版本，每个来源最多显示 12 个")
+                    .font(.caption).foregroundStyle(.secondary)
+                Spacer()
+            }
             if !sourceStatuses.isEmpty {
                 HStack(alignment: .top, spacing: 14) {
                     ForEach(sourceStatuses) { status in
@@ -82,15 +91,16 @@ struct SearchView: View {
         let id = UUID(); requestID = id; searching = true; error = nil; sourceStatuses = []
         // Keep the last completed versions visible while retrying a source.
         // A transport failure must not make known results disappear.
-        if trackID != model.session.track?.id || previousQuery != query { results = [] }
+        if trackID != model.session.track?.id || previousQuery != query || previousCompleteSearch != completeSearch { results = [] }
         retainedPreviousResults = !results.isEmpty
         previousQuery = query
+        previousCompleteSearch = completeSearch
         let track = model.session.track ?? Track(playerID: "search", playerName: "搜索", title: query)
         let configuration = model.preferences.sourceConfigurationReader.read()
         trackID = model.session.track?.id
         searchTask = Task {
             do {
-                for try await result in model.store.search(track: track, keyword: query, onSourceUpdate: { status in
+                for try await result in model.store.search(track: track, keyword: query, complete: completeSearch, onSourceUpdate: { status in
                     Task { @MainActor in
                         guard requestID == id else { return }
                         if let index = sourceStatuses.firstIndex(where: { $0.source == status.source }) { sourceStatuses[index] = status }
@@ -109,7 +119,7 @@ struct SearchView: View {
             if requestID == id { searching = false; deadline?.cancel() }
         }
         deadline = Task {
-            do { try await Task.sleep(for: .seconds(44)) } catch { return }
+            do { try await Task.sleep(for: completeSearch ? .seconds(44) : .seconds(22)) } catch { return }
             guard requestID == id else { return }; searchTask?.cancel(); searching = false
             if results.isEmpty { error = "歌词源响应超时，请重试。" }
         }

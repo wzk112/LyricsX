@@ -12,7 +12,7 @@ func diagnoseSearchCandidates() async throws {
     let cache = LyricsCache(directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
     let store = LyricsStore(cache: cache)
     var documents: [LyricsDocument] = []
-    for try await value in store.search(track: track, keyword: env["LYRICSX_DIAG_KEYWORD"], onSourceUpdate: { status in
+    for try await value in store.search(track: track, keyword: env["LYRICSX_DIAG_KEYWORD"], complete: env["LYRICSX_DIAG_COMPLETE"] == "1", onSourceUpdate: { status in
         if !status.isSearching { print("SEARCH_SOURCE source=\(status.source) count=\(status.count) issue=\(status.issue ?? "none")") }
     }) {
         let doc = value.document
@@ -68,7 +68,7 @@ func liveSearchRecoversAllSourcesAcrossRepeatedSearches() async throws {
         let store = LyricsStore(cache: LyricsCache(directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)))
         var values: [LyricsDocument] = []
         do {
-            for try await candidate in store.search(track: track, keyword: track.title + " " + track.artist) { values.append(candidate.document) }
+            for try await candidate in store.search(track: track, keyword: track.title + " " + track.artist, complete: true) { values.append(candidate.document) }
         } catch { print("LIVE_SEARCH_PARTIAL run=\(run) error=\(error.localizedDescription)") }
         let counts = Dictionary(grouping: values, by: \.source).mapValues(\.count)
         let matched = values.filter { CandidateRanker.score($0, for: track) >= 60 }

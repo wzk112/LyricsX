@@ -120,7 +120,7 @@ private actor CheckpointGate {
     for try await candidate in store.lyrics(for: track, forceRefresh: true) { automatic.append(candidate) }
     #expect(automatic.count == 1 && automatic.first?.document.hasWordTiming == true)
     var manual: [LyricCandidate] = []
-    for try await candidate in store.search(track: track, keyword: "Song Singer") { manual.append(candidate) }
+    for try await candidate in store.search(track: track, keyword: "Song Singer", complete: true) { manual.append(candidate) }
     #expect(manual.count == 30)
 }
 
@@ -159,4 +159,96 @@ private actor CheckpointGate {
     #expect(results.first?.document.lines.first?.text == "Hello world")
     #expect(results.allSatisfy { $0.isProvisional })
     #expect(results.allSatisfy { $0.score < 999 })
+}
+
+private actor ManualSearchProbe {
+    var limits: [Int] = []
+    var queries: [String] = []
+    func record(track: Track, keyword: String?, limit: Int) {
+        limits.append(limit)
+        queries.append(keyword ?? "info:" + track.title)
+    }
+}
+
+@Test func compactManualSearchBoundsEverySourceWhileCompleteSearchRetainsAllVersions() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let track = Track(playerID: "test", playerName: "", title: "Song (Full Version)", artist: "Singer")
+    let probe = ManualSearchProbe()
+    let store = LyricsStore(cache: .init(directory: directory),
+                            aliasResolver: TrackAliasResolver { _ in Data(#"{"results":[]}"#.utf8) }) { query, keyword, config, _ in
+        .init { stream in
+            let source = config.enabled.first ?? "Unknown"
+            let task = Task {
+                await probe.record(track: query, keyword: keyword, limit: config.candidateLimit)
+                let count = keyword == nil ? 4 : 30
+                for id in 0..<count {
+                    stream.yield(.init(title: query.title, artist: query.artist, source: source,
+                                       lines: [.init(id: 0, time: 0, text: "Version \(id)")], providerID: String(id)))
+                }
+                stream.finish()
+            }
+            stream.onTermination = { _ in task.cancel() }
+        }
+    }
+    var compact: [LyricCandidate] = []
+    for try await value in store.search(track: track, keyword: track.title + " " + track.artist) { compact.append(value) }
+    #expect(compact.count == 4 * LyricsStore.compactManualResultsPerSource)
+    #expect(await probe.limits.allSatisfy { $0 == LyricsStore.compactManualCandidateLimit })
+    #expect(await probe.queries.contains("info:" + track.title))
+    #expect(await probe.queries.contains(track.title))
+
+    var complete: [LyricCandidate] = []
+    for try await value in store.search(track: track, keyword: track.title + " " + track.artist, complete: true) { complete.append(value) }
+    #expect(complete.count == 4 * 30)
+    #expect(await probe.limits.contains(LyricsStore.completeManualCandidateLimit))
+}
+
+@Test func compactSearchCollapsesIdenticalProviderCopiesButCompleteSearchExposesThem() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let track = Track(playerID: "test", playerName: "", title: "Song", artist: "Singer")
+    let config: SourceConfiguration = {
+        var value = SourceConfiguration(); value.enabled = ["NetEase"]; value.strictMatching = false; return value
+    }()
+    let store = LyricsStore(cache: .init(directory: directory), configuration: { config },
+                            aliasResolver: TrackAliasResolver { _ in Data(#"{"results":[]}"#.utf8) }) { query, _, sourceConfig, _ in
+        .init { stream in
+            for id in 0..<8 {
+                stream.yield(.init(title: query.title, artist: query.artist, source: sourceConfig.enabled.first ?? "NetEase",
+                                   lines: [.init(id: 0, time: 1, text: "Same lyric")], providerID: String(id)))
+            }
+            stream.finish()
+        }
+    }
+    var compact: [LyricCandidate] = [], complete: [LyricCandidate] = []
+    for try await value in store.search(track: track, keyword: "Song Singer") { compact.append(value) }
+    for try await value in store.search(track: track, keyword: "Song Singer", complete: true) { complete.append(value) }
+    #expect(compact.count == 1)
+    #expect(complete.count == 8)
+}
+
+@Test func compactCurrentTrackSearchHidesUnrelatedSameTitleButCustomKeywordStillShowsIt() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let track = Track(playerID: "test", playerName: "", title: "In My Feelings", artist: "Nerissa")
+    let config: SourceConfiguration = {
+        var value = SourceConfiguration(); value.enabled = ["NetEase"]; value.strictMatching = false; return value
+    }()
+    let store = LyricsStore(cache: .init(directory: directory), configuration: { config },
+                            aliasResolver: TrackAliasResolver { _ in Data(#"{"results":[]}"#.utf8) }) { _, _, sourceConfig, _ in
+        .init { stream in
+            let source = sourceConfig.enabled.first ?? "NetEase"
+            stream.yield(.init(title: "In My Feelings", artist: "Someone Else", source: source,
+                               lines: [.init(id: 0, time: 1, text: "Wrong song")], providerID: "wrong"))
+            stream.yield(.init(title: "In My Feelings", artist: "Nerissa", source: source,
+                               lines: [.init(id: 0, time: 1, text: "Right song")], providerID: "right"))
+            stream.finish()
+        }
+    }
+    var currentTrack: [LyricCandidate] = [], custom: [LyricCandidate] = []
+    for try await value in store.search(track: track, keyword: "In My Feelings Nerissa") { currentTrack.append(value) }
+    for try await value in store.search(track: track, keyword: "unrelated custom words") { custom.append(value) }
+    #expect(currentTrack.map(\.document.providerID) == ["right"])
+    #expect(Set(custom.compactMap(\.document.providerID)) == ["wrong", "right"])
 }

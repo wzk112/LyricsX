@@ -119,7 +119,9 @@ public final class LyricsStore: LyricsRepository, Sendable {
     /// Download budgets per source/query. Manual search retains more versions;
     /// both paths use the same matching, aliases, and completion-order delivery.
     static let automaticCandidateLimit = 40
-    static let manualCandidateLimit = 80
+    static let compactManualCandidateLimit = 12
+    static let completeManualCandidateLimit = 80
+    static let compactManualResultsPerSource = 12
     public let cache: LyricsCache
     private let configuration: @Sendable () -> SourceConfiguration
     private let aliasResolver: TrackAliasResolver
@@ -181,13 +183,14 @@ public final class LyricsStore: LyricsRepository, Sendable {
             continuation.onTermination = { _ in task.cancel() }
         }
     }
-    public func search(track: Track, keyword: String? = nil,
+    public func search(track: Track, keyword: String? = nil, complete: Bool = false,
                        onSourceUpdate: @escaping @Sendable (SourceSearchStatus) -> Void = { _ in }) -> AsyncThrowingStream<LyricCandidate, Error> {
         var config = configuration()
-        config.candidateLimit = keyword == nil ? Self.automaticCandidateLimit : Self.manualCandidateLimit
+        config.candidateLimit = keyword == nil ? Self.automaticCandidateLimit
+            : (complete ? Self.completeManualCandidateLimit : Self.compactManualCandidateLimit)
         let configuration = config
         return AsyncThrowingStream { continuation in
-            let collector = SearchCollector(track: track, keyword: keyword, configuration: configuration,
+            let collector = SearchCollector(track: track, keyword: keyword, complete: complete, configuration: configuration,
                                             continuation: continuation, onSourceUpdate: onSourceUpdate)
             let task = Task {
                 let sessionConfig = URLSessionConfiguration.ephemeral
@@ -198,7 +201,8 @@ public final class LyricsStore: LyricsRepository, Sendable {
                 defer { session.invalidateAndCancel() }
                 let client = SecureLyricsHTTPClient(session: session)
                 await collector.begin()
-                let budget = keyword == nil ? searchBudget : max(searchBudget, .seconds(40))
+                let budget = keyword == nil ? searchBudget
+                    : (complete ? max(searchBudget, .seconds(40)) : min(searchBudget, .seconds(18)))
                 let deadline = Task {
                     do { try await Task.sleep(for: budget) } catch { return }
                     await collector.finish(timedOut: true)
@@ -227,7 +231,7 @@ public final class LyricsStore: LyricsRepository, Sendable {
                                     for try await document in self.searchBackend(query.track, query.keyword, sourceConfig, client) {
                                         guard !Task.isCancelled else { return }
                                         _ = await collector.add(document)
-                                        if await collector.sourceIsSatisfied(source) { break }
+                                        if await collector.sourceShouldStop(source) { break }
                                     }
                                     await collector.completed(source: source, error: nil)
                                 } catch {
@@ -254,9 +258,14 @@ public final class LyricsStore: LyricsRepository, Sendable {
             || value == CandidateRanker.normalized(track.title + " " + track.artist)
     }
 
-    static func queryKeywords(track: Track, keyword: String?) -> [String?] {
+    static func queryKeywords(track: Track, keyword: String?, complete: Bool = true) -> [String?] {
         if let keyword, !usesTrackHints(track: track, keyword: keyword) { return [keyword] }
-        return [nil] + TrackSearchText.titles(track.title).map { Optional($0) }
+        let titles = TrackSearchText.titles(track.title)
+        if complete { return [nil] + titles.map { Optional($0) } }
+        // The info query already carries the original title and artist. Compact
+        // search adds only the first useful cleaned title instead of multiplying
+        // every source by every subtitle and alias spelling.
+        return [nil] + titles.prefix(2).map { Optional($0) }
     }
 
     private static func providerSearch(track: Track, keyword: String?, config: SourceConfiguration,
@@ -410,9 +419,9 @@ private actor SearchCollector {
         var title: String; var artist: String; var source: String
         var lines: [LyricLine]; var plain: String?; var instrumental: Bool
         var providerID: String?; var album: String
-        init(_ document: LyricsDocument) {
+        init(_ document: LyricsDocument, preserveProviderID: Bool) {
             title = document.title; artist = document.artist; source = document.source
-            providerID = document.providerID; album = document.album
+            providerID = preserveProviderID ? document.providerID : nil; album = document.album
             lines = document.lines; plain = document.plainText; instrumental = document.isInstrumental
         }
     }
@@ -421,6 +430,7 @@ private actor SearchCollector {
     let continuation: AsyncThrowingStream<LyricCandidate, Error>.Continuation
     var aliases: [Track] = []
     var candidates: [Key: LyricCandidate] = [:]
+    var visibleKeys: Set<Key> = []
     let onSourceUpdate: @Sendable (SourceSearchStatus) -> Void
     var sourceErrors: [String: String] = [:]
     var activeSources: Set<String> = []
@@ -438,17 +448,20 @@ private actor SearchCollector {
     var catalogDone = false
     let useTrackHints: Bool
     let isAutomatic: Bool
+    let completeManualSearch: Bool
     var satisfiedSources: Set<String> = []
+    var completedQueries: [String: Int] = [:]
     var finished = false
     var successes = 0
     var failures = 0
     var allFailed: Bool { candidates.isEmpty && successes == 0 && failures > 0 }
-    init(track: Track, keyword: String?, configuration: SourceConfiguration, continuation: AsyncThrowingStream<LyricCandidate, Error>.Continuation, onSourceUpdate: @escaping @Sendable (SourceSearchStatus) -> Void) {
+    init(track: Track, keyword: String?, complete: Bool, configuration: SourceConfiguration, continuation: AsyncThrowingStream<LyricCandidate, Error>.Continuation, onSourceUpdate: @escaping @Sendable (SourceSearchStatus) -> Void) {
         self.onSourceUpdate = onSourceUpdate
         self.useTrackHints = LyricsStore.usesTrackHints(track: track, keyword: keyword)
         self.isAutomatic = keyword == nil
+        self.completeManualSearch = complete
         self.track = track; self.configuration = configuration; self.continuation = continuation
-        let queries = LyricsStore.queryKeywords(track: track, keyword: keyword).map { Query(track: track, keyword: $0) }
+        let queries = LyricsStore.queryKeywords(track: track, keyword: keyword, complete: complete || keyword == nil).map { Query(track: track, keyword: $0) }
         for source in configuration.availableSources {
             queues[source] = queries
             queryKeys[source] = Set(queries.map(\.key))
@@ -463,25 +476,27 @@ private actor SearchCollector {
             discovered += addAliases(ArtistAliasEvidence.searchTitles(in: document, for: track, aliases: aliases))
         }
         guard !finished else { return discovered }
-        let key = Key(document)
+        let key = Key(document, preserveProviderID: isAutomatic || completeManualSearch)
         guard candidates[key] == nil else { return discovered }
         let candidate = LyricCandidate(document: document, score: configuration.bestScore(document, for: track, aliases: aliases))
         candidates[key] = candidate
-        continuation.yield(candidate)
+        publish(candidate, key: key)
         updateSatisfiedSources()
+        updateCompactLimit(for: document.source)
         if !finished { report(document.source) }
         return discovered
     }
     @discardableResult func addAliases(_ values: [Track]) -> [Track] {
         guard !finished else { return [] }
         var added: [Track] = []
-        for value in values where aliases.count < 4 {
+        let aliasLimit = isAutomatic || completeManualSearch ? 4 : 2
+        for value in values where aliases.count < aliasLimit {
             guard !aliases.contains(where: { CandidateRanker.normalized($0.title) == CandidateRanker.normalized(value.title)
                 && CandidateRanker.normalized($0.artist) == CandidateRanker.normalized(value.artist) }) else { continue }
             aliases.append(value); added.append(value)
             for source in configuration.availableSources {
                 if satisfiedSources.contains(source) { continue }
-                let queries = LyricsStore.queryKeywords(track: value, keyword: nil).map { Query(track: value, keyword: $0) }
+                let queries = LyricsStore.queryKeywords(track: value, keyword: nil, complete: isAutomatic || completeManualSearch).map { Query(track: value, keyword: $0) }
                     .filter { queryKeys[source, default: []].insert($0.key).inserted }
                 queues[source, default: []].insert(contentsOf: queries, at: 0)
                 if !queries.isEmpty, let waiter = waiters.removeValue(forKey: source) {
@@ -494,10 +509,11 @@ private actor SearchCollector {
         for (key, var candidate) in candidates {
             let score = configuration.bestScore(candidate.document, for: track, aliases: aliases)
             if score > candidate.score {
-                candidate.score = score; candidates[key] = candidate; continuation.yield(candidate)
+                candidate.score = score; candidates[key] = candidate; publish(candidate, key: key)
             }
         }
         updateSatisfiedSources()
+        for source in configuration.availableSources { updateCompactLimit(for: source) }
         return added
     }
     private func updateSatisfiedSources() {
@@ -515,16 +531,38 @@ private actor SearchCollector {
             continuation.finish()
         }
     }
-    func sourceIsSatisfied(_ source: String) -> Bool { satisfiedSources.contains(source) }
+    private func updateCompactLimit(for source: String) {
+        guard !isAutomatic, !completeManualSearch else { return }
+        let visibleCount = visibleKeys.lazy.filter({ self.candidates[$0]?.document.source == source }).count
+        if visibleCount >= LyricsStore.compactManualResultsPerSource || (catalogDone && completedQueries[source, default: 0] >= 2) {
+            satisfiedSources.insert(source)
+            queues[source] = []
+        }
+    }
+    private func publish(_ candidate: LyricCandidate, key: Key) {
+        // For the current track, compact search keeps off-target same-name songs
+        // available for later alias rescoring without flooding the visible list.
+        let visible = isAutomatic || completeManualSearch || !useTrackHints || candidate.score >= 60
+        guard visible else { return }
+        visibleKeys.insert(key)
+        continuation.yield(candidate)
+    }
+    func sourceShouldStop(_ source: String) -> Bool { satisfiedSources.contains(source) }
     func begin() { for source in configuration.availableSources { report(source) } }
     func completed(source: String, error: String?) {
         guard !finished else { return }
         activeSources.remove(source)
+        completedQueries[source, default: 0] += 1
         if let error { failures += 1; sourceErrors[source] = error }
         else { successes += 1 }
+        updateCompactLimit(for: source)
         report(source)
     }
-    func catalogFinished() { catalogDone = true; finishWaitingIfDrained() }
+    func catalogFinished() {
+        catalogDone = true
+        for source in configuration.availableSources { updateCompactLimit(for: source) }
+        finishWaitingIfDrained()
+    }
     func nextQuery(source: String) async -> Query? {
         guard !finished, !Task.isCancelled else { return nil }
         if satisfiedSources.contains(source) { finishWaitingIfDrained(); return nil }
@@ -553,7 +591,7 @@ private actor SearchCollector {
         cancel()
     }
     private func report(_ source: String, finished: Bool = false, timedOut: Bool = false) {
-        let count = candidates.values.filter { $0.document.source == source }.count
+        let count = visibleKeys.lazy.filter { self.candidates[$0]?.document.source == source }.count
         onSourceUpdate(.init(source: source, count: count, isSearching: !finished,
                              issue: sourceErrors[source] ?? (timedOut ? "搜索超时，已保留结果" : nil)))
     }

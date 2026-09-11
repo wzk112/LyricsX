@@ -133,7 +133,7 @@ private final class StatusRecorder: @unchecked Sendable {
         }
     }
     var values: [LyricCandidate] = []
-    for try await value in store.search(track: track, keyword: "Song Singer", onSourceUpdate: { statuses.add($0) }) { values.append(value) }
+    for try await value in store.search(track: track, keyword: "Song Singer", complete: true, onSourceUpdate: { statuses.add($0) }) { values.append(value) }
     #expect(values.count == 25)
     #expect(statuses.values.last(where: { $0.source == "LRCLIB" })?.count == 25)
     #expect(statuses.values.last(where: { $0.source == "NetEase" })?.issue?.contains("限流") == true)
