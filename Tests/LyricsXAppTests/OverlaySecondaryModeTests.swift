@@ -28,7 +28,7 @@ import LyricsXCore
     }
     defaults.set("unknown", forKey: "overlaySecondaryMode")
     #expect(Preferences(defaults: defaults).overlaySecondaryMode == .translation)
-    #expect(OverlaySecondaryMode.either.reservedHeight(translationSize: 13, nextSize: 24, primarySpacing: 12, secondarySpacing: 8) == 24 * 1.4 + 12)
+    #expect(OverlaySecondaryMode.either.reservedHeight(translationSize: 13, nextSize: 24, primarySpacing: 12, secondarySpacing: 8) == 24 * 2.8 + 12)
 }
 
 private struct AuxiliaryFixtureRepository: LyricsRepository {

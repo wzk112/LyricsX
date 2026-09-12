@@ -74,6 +74,11 @@ public final class LyricsSession {
         let newIndex = document?.index(at: position)
         if currentLineIndex != newIndex { currentLineIndex = newIndex }
     }
+    /// Display frames sample the same bounded monotonic clock directly. They
+    /// never mutate playback or wait for the lower-frequency UI/session tick.
+    public func presentationPosition(at now: Double = ProcessInfo.processInfo.systemUptime) -> Double {
+        isPlaying ? timeline.position(at: now) : position
+    }
     public func freeze(now: Double = ProcessInfo.processInfo.systemUptime) {
         timeline.freeze(at: now); isPlaying = false; tick(now: now)
     }

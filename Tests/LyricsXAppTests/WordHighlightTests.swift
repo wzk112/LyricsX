@@ -1,0 +1,283 @@
+import AppKit
+import CoreImage
+import SwiftUI
+import Testing
+import LyricsXCore
+@testable import LyricsXApp
+
+@Test func heldNotesEmphasizeTheWholeCueAnywhereInTheLine() {
+    let held = WordCue(text: "Stay", start: 2, end: 5)
+    let middle = LyricEmphasisFrame(cue: held, time: 3.6, options: .init())
+    #expect(middle.glow > 0.5 && middle.scale > 1.04 && middle.scale < 1.08)
+    #expect(LyricEmphasisFrame(cue: held, time: 1, options: .init()).scale >= 0.98)
+    for time in [1.0, 2.0, 5.0, 8.0] {
+        #expect(LyricEmphasisFrame(cue: held, time: time, options: .init()).glow == 0)
+    }
+    let fast = WordCue(text: "字", start: 2, end: 2.2)
+    #expect(LyricEmphasisFrame(cue: fast, time: 2.1, options: .init()).glow == 0)
+    #expect(LyricEmphasisFrame(cue: .init(text: "slow", start: 0, end: 1), time: 0.55, options: .init()).glow > 0.3)
+    let instant = WordCue(text: "!", start: 2, end: 2)
+    let instantaneous = LyricEmphasisFrame(cue: instant, time: 2, options: .init())
+    #expect(instantaneous.progress == 1 && instantaneous.scale == 1 && instantaneous.glow == 0)
+    // A seek directly to the past or future is determined solely by the cue.
+    #expect(middle == LyricEmphasisFrame(cue: held, time: 3.6, options: .init()))
+}
+
+@Test func wordEffectsRespectIndependentSwitchesAndReduceMotion() {
+    let word = WordCue(text: "光", start: 0, end: 3)
+    let staticStyle = LyricEmphasisFrame(cue: word, time: 1.5, options: .init(lift: false, glow: false, hdr: true))
+    #expect(staticStyle.scale == 1 && staticStyle.lift == 0 && staticStyle.glow == 0 && staticStyle.progress == 0.5)
+    let reduced = LyricEmphasisFrame(cue: word, time: 1.5, options: .init(hdr: true, reduced: true))
+    #expect(reduced == staticStyle)
+    #expect(!LyricEmphasisOptions(glow: false, hdr: true).usesHDR)
+    #expect(!LyricEmphasisOptions(hdr: true, reduced: true).usesHDR)
+    #expect(LyricEmphasisOptions(hdr: true).usesHDR)
+}
+
+@Test func wrappedWordsRevealOnceAcrossAllVisualRuns() {
+    #expect(LyricEmphasisFrame.reveal(progress: 0.5, offset: 0, width: 60, total: 100) == 5.0 / 6)
+    #expect(LyricEmphasisFrame.reveal(progress: 0.5, offset: 60, width: 40, total: 100) == 0)
+    #expect(LyricEmphasisFrame.reveal(progress: 0.8, offset: 60, width: 40, total: 100) == 0.5)
+}
+
+@Test func lyricFragmentsPreserveGraphemesPunctuationAndRepeatedWords() {
+    let text = "光，光 e\u{301} 👩🏽‍🚀 stay stay!"
+    let words = [WordCue(text: "光", start: 0, end: 0.4), .init(text: "光", start: 0.4, end: 2.5),
+                 .init(text: "e\u{301}", start: 2.5, end: 3), .init(text: "👩🏽‍🚀", start: 3, end: 4),
+                 .init(text: "stay", start: 4, end: 4.5), .init(text: "stay", start: 4.5, end: 7)]
+    let line = LyricLine(id: 0, time: 0, text: text, words: words)
+    let fragments = TimedLyricFragment.make(line: line, text: text)
+    #expect(fragments.map(\.text).joined() == text)
+    #expect(fragments.compactMap(\.cue) == words)
+    #expect(TimedLyricFragment.make(line: line, text: "另一种显示").allSatisfy { $0.cue == nil })
+    let plain = LyricLine(id: 0, time: 0, text: "普通行级歌词")
+    #expect(TimedLyricFragment.make(line: plain, text: plain.text).allSatisfy { $0.cue == nil })
+}
+
+@Suite @MainActor struct WordHighlightRenderingTests {
+    @Test func effectsPreferencesPersistWithHDROffByDefault() throws {
+        let suite = "LyricsXTests-" + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let prefs = Preferences(defaults: defaults)
+        #expect(prefs.lyricWordLift && prefs.lyricGlow && !prefs.lyricHDR)
+        prefs.lyricWordLift = false; prefs.lyricGlow = false; prefs.lyricHDR = true; prefs.lyricHDRBrightness = 3.2
+        let restored = Preferences(defaults: defaults)
+        #expect(!restored.lyricWordLift && !restored.lyricGlow && restored.lyricHDR)
+        #expect(!restored.lyricEmphasis.usesHDR && restored.lyricHDRBrightness == 3.2)
+    }
+
+    @Test func nativeTextRendererKeepsLayoutAndAddsVisibleBloom() throws {
+        let plain = try render(time: 1.6, effects: .init(lift: false, glow: false))
+        let bloom = try render(time: 1.6, effects: .init(lift: false, glow: true))
+        let before = try render(time: 0, effects: .init())
+        let after = try render(time: 4, effects: .init())
+        #expect(plain.width == bloom.width && before.width == after.width)
+        #expect(plain.height == bloom.height && before.height == after.height)
+        #expect(try energy(bloom) > energy(plain) * 1.03)
+        #expect(try energy(after) > energy(before) * 1.5)
+    }
+
+    @Test func hdrInkCarriesExtendedRangeAndDefaultStaysSDR() {
+        let resolved = HeldNoteRenderer.hdrWhite(brightness: 1.6).resolveHDR(in: EnvironmentValues())
+        #expect(resolved.linearRed > 1.5 && resolved.headroom == 1.6)
+        #expect(!LyricEmphasisOptions().usesHDR)
+    }
+
+    @Test func hdrRenderingProducesExtendedBrightnessOnlyWhenEnabled() throws {
+        let sdr = try render(time: 1.6, effects: .init(lift: false, glow: true))
+        let hdr = try render(time: 1.6, effects: .init(lift: false, glow: true, hdr: true))
+        func peak(_ image: CGImage) -> Float {
+            let space = CGColorSpace(name: CGColorSpace.extendedLinearSRGB)!
+            let context = CIContext(options: [.workingColorSpace: space, .outputColorSpace: space])
+            var pixels = [Float](repeating: 0, count: image.width * image.height * 4)
+            pixels.withUnsafeMutableBytes { buffer in
+                context.render(CIImage(cgImage: image), toBitmap: buffer.baseAddress!, rowBytes: image.width * 16,
+                               bounds: CGRect(x: 0, y: 0, width: image.width, height: image.height), format: .RGBAf, colorSpace: space)
+            }
+            return stride(from: 0, to: pixels.count, by: 4).map { pixels[$0] }.max() ?? 0
+        }
+        let sdrPeak = peak(sdr), hdrPeak = peak(hdr)
+        print("Rendered lyric luminance: SDR=\(sdrPeak), HDR=\(hdrPeak)")
+        #expect(sdrPeak <= 1.01)
+        #expect(hdrPeak > 1.1)
+        let boosted = try render(time: 1.6, effects: .init(lift: false, glow: true, hdr: true, hdrBrightness: 3.2))
+        #expect(peak(boosted) > hdrPeak * 1.4)
+    }
+
+    @Test func incrementalLayoutKeepsExistingInkStillAndFutureTextInvisible() throws {
+        let lines = ["光", "光慢", "光慢亮"].enumerated().map {
+            LyricLine(id: $0, time: Double($0) * 0.08, text: $1)
+        }
+        func columns(_ index: Int) throws -> [Double] {
+            let line = lines[index]
+            let plan = try #require(LyricLinePresentation.make(lines: lines, index: index))
+            let view = WordHighlight(line: line, time: 1, active: true, text: line.text,
+                                     effects: .init(lift: false, glow: false), arrival: plan.withoutEntry(text: line.text))
+                .font(.system(size: 38)).foregroundStyle(.white)
+                .frame(width: 350, height: 130).background(.black)
+            let renderer = ImageRenderer(content: view)
+            renderer.scale = 1
+            let image = try #require(renderer.cgImage)
+            let bitmap = NSBitmapImageRep(cgImage: image)
+            return (0..<image.width).map { x in
+                (0..<image.height).reduce(0) { $0 + (bitmap.colorAt(x: x, y: $1)?.redComponent ?? 0) }
+            }
+        }
+        let first = try columns(0), second = try columns(1), full = try columns(2)
+        let left = try #require(first.firstIndex(where: { $0 > 0.2 }))
+        let right = try #require(first.lastIndex(where: { $0 > 0.2 }))
+        #expect(second.firstIndex(where: { $0 > 0.2 }) == left)
+        #expect(full.firstIndex(where: { $0 > 0.2 }) == left)
+        for x in left...right {
+            #expect(abs(first[x] - second[x]) < 0.1)
+            #expect(abs(first[x] - full[x]) < 0.1)
+        }
+        #expect(second.reduce(0, +) > first.reduce(0, +) * 1.4)
+        #expect(full.reduce(0, +) > second.reduce(0, +) * 1.2)
+    }
+
+    @Test func customRendererAlignsWithNativeTextOnOneAndTwoLines() throws {
+        for text in ["让光停留在这一刻", "让光停留在这一刻\n慢慢亮起来"] {
+            func ink(custom: Bool) throws -> CGRect {
+                let view = Group {
+                    if custom {
+                        WordHighlight(line: .init(id: 0, time: 0, text: text), time: 5, active: true,
+                                      text: text, effects: .init(lift: false, glow: false))
+                    } else { Text(text) }
+                }.font(.system(size: 28)).multilineTextAlignment(.center).foregroundStyle(.white)
+                    .frame(width: 350, height: 160).background(.black)
+                let renderer = ImageRenderer(content: view)
+                renderer.scale = 1
+                let bitmap = NSBitmapImageRep(cgImage: try #require(renderer.cgImage))
+                var left = 350, right = 0, top = 160, bottom = 0
+                for y in 0..<160 {
+                    for x in 0..<350 where (bitmap.colorAt(x: x, y: y)?.redComponent ?? 0) > 0.2 {
+                        left = min(left, x); right = max(right, x); top = min(top, y); bottom = max(bottom, y)
+                    }
+                }
+                return CGRect(x: left, y: top, width: right - left, height: bottom - top)
+            }
+            let plain = try ink(custom: false), custom = try ink(custom: true)
+            print("Native ink=\(plain), rendered ink=\(custom)")
+            #expect(abs(plain.midX - custom.midX) <= 1)
+            #expect(abs(plain.midY - custom.midY) <= 1)
+        }
+    }
+
+    @Test func twoPrimaryLinesLeaveSeparateSpaceForTranslationAndNext() throws {
+        let suite = "LyricsXTests-" + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let prefs = Preferences(defaults: defaults)
+        prefs.overlaySecondaryMode = .both
+        prefs.lyricGlow = false; prefs.lyricWordLift = false
+        let doc = LyricsDocument(lines: [.init(id: 0, time: 0, text: "MMMM\nMMMM", translation: "MMMM"),
+                                         .init(id: 1, time: 10, text: "MMMM")])
+        for (width, font) in [(320.0, 26.0), (620.0, 44.0), (1000.0, 32.0)] {
+            prefs.fontSize = font
+            let height = OverlayLayoutMetrics.height(preferences: prefs) - OverlayLayoutMetrics.chromeHeight
+            let view = OverlayLyricsContent(preferences: prefs, document: doc, index: 0, lyricTime: { 5 })
+                .frame(width: width - 60, height: height).background(.black)
+            let renderer = ImageRenderer(content: view)
+            renderer.scale = 1
+            let bitmap = NSBitmapImageRep(cgImage: try #require(renderer.cgImage))
+            var bands: [ClosedRange<Int>] = [], begin: Int?
+            for y in 0...bitmap.pixelsHigh {
+                let ink = y < bitmap.pixelsHigh && (0..<bitmap.pixelsWide).contains {
+                    (bitmap.colorAt(x: $0, y: y)?.redComponent ?? 0) > 0.25
+                }
+                if ink, begin == nil { begin = y }
+                if !ink, let start = begin { bands.append(start...(y - 1)); begin = nil }
+            }
+            #expect(bands.count == 4)
+            if bands.count == 4 {
+                #expect(bands[2].lowerBound - bands[1].upperBound >= 7)
+                #expect(bands[3].lowerBound - bands[2].upperBound >= 5)
+            }
+        }
+    }
+
+    @Test func promotionStartsWithTheSameNextLinePixelsAndNoPreviousLine() throws {
+        let suite = "LyricsXTests-" + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let prefs = Preferences(defaults: defaults)
+        prefs.overlaySecondaryMode = .next; prefs.fontSize = 28; prefs.nextLineFontSize = 14
+        let doc = LyricsDocument(lines: [.init(id: 0, time: 0, text: "FIRST WORD"),
+            .init(id: 1, time: 3, text: "SECOND WORD"), .init(id: 2, time: 6, text: "THIRD WORD")])
+        func render(index: Int, time: Double) throws -> NSBitmapImageRep {
+            let height = OverlayLayoutMetrics.height(preferences: prefs) - OverlayLayoutMetrics.chromeHeight
+            let view = OverlayLyricsContent(preferences: prefs, document: doc, index: index, lyricTime: { time })
+                .frame(width: 500, height: height).background(.black)
+            let renderer = ImageRenderer(content: view); renderer.scale = 1
+            return NSBitmapImageRep(cgImage: try #require(renderer.cgImage))
+        }
+        let before = try render(index: 0, time: 2.99), after = try render(index: 1, time: 3)
+        var oldInk = 0.0, remainingOldInk = 0.0, nextDifference = 0.0
+        for y in 0..<before.pixelsHigh {
+            for x in 0..<before.pixelsWide {
+                let a = before.colorAt(x: x, y: y)?.redComponent ?? 0
+                let b = after.colorAt(x: x, y: y)?.redComponent ?? 0
+                if y < 80 { oldInk += a; remainingOldInk += b }
+                else { nextDifference += abs(a - b) }
+            }
+        }
+        #expect(oldInk > 100 && remainingOldInk < 1)
+        #expect(nextDifference < 1)
+    }
+
+    @Test func adaptiveOneToTwoLinePromotionPreservesPreviewPixels() throws {
+        let suite = "LyricsXTests-" + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let prefs = Preferences(defaults: defaults)
+        prefs.overlaySecondaryMode = .next; prefs.fontSize = 28; prefs.nextLineFontSize = 14
+        let doc = LyricsDocument(lines: [.init(id: 0, time: 0, text: "FIRST WORD"),
+            .init(id: 1, time: 3, text: "SECOND\nWORD"), .init(id: 2, time: 6, text: "THIRD WORD")])
+        func render(index: Int, time: Double) throws -> NSBitmapImageRep {
+            let view = OverlayLyricsContent(preferences: prefs, document: doc, index: index,
+                lyricTime: { time }, adaptiveCanvasWidth: 500)
+                .frame(width: 500).frame(height: 240, alignment: .top).background(.black)
+            let renderer = ImageRenderer(content: view); renderer.scale = 1
+            return NSBitmapImageRep(cgImage: try #require(renderer.cgImage))
+        }
+        let before = try render(index: 0, time: 2.99), after = try render(index: 1, time: 3)
+        var oldInk = 0.0, oldRemaining = 0.0, nextDifference = 0.0
+        for y in 0..<before.pixelsHigh {
+            for x in 0..<before.pixelsWide {
+                let a = before.colorAt(x: x, y: y)?.redComponent ?? 0
+                let b = after.colorAt(x: x, y: y)?.redComponent ?? 0
+                if y < 40 { oldInk += a; oldRemaining += b }
+                else { nextDifference += abs(a - b) }
+            }
+        }
+        #expect(oldInk > 100 && oldRemaining < 1)
+        #expect(nextDifference < 1)
+    }
+
+    private func render(time: Double, effects: LyricEmphasisOptions) throws -> CGImage {
+        let line = LyricLine(id: 0, time: 0, text: "Stay 光", words: [
+            .init(text: "Stay", start: 0.1, end: 3.2), .init(text: "光", start: 3.2, end: 4)
+        ])
+        let view = WordHighlight(line: line, time: time, active: true, text: line.text, effects: effects)
+            .font(.system(size: 38, weight: .semibold)).foregroundStyle(.white)
+            .padding(24).frame(width: 350, height: 130).background(.black)
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = 1
+        renderer.colorMode = .extendedLinear
+        renderer.allowedDynamicRange = effects.usesHDR ? .high : .standard
+        return try #require(renderer.cgImage)
+    }
+
+    private func energy(_ image: CGImage) throws -> Double {
+        var pixels = [Float](repeating: 0, count: image.width * image.height * 4)
+        let space = try #require(CGColorSpace(name: CGColorSpace.extendedLinearSRGB))
+        let context = CIContext(options: [.workingColorSpace: space, .outputColorSpace: space])
+        pixels.withUnsafeMutableBytes { buffer in
+            context.render(CIImage(cgImage: image), toBitmap: buffer.baseAddress!, rowBytes: image.width * 16,
+                           bounds: CGRect(x: 0, y: 0, width: image.width, height: image.height), format: .RGBAf, colorSpace: space)
+        }
+        return stride(from: 0, to: pixels.count, by: 4).reduce(0) { $0 + Double(pixels[$1]) }
+    }
+}

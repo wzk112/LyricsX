@@ -126,7 +126,14 @@ struct PreferencesView: View {
             }
             settingsGroup("外观") {
                 sliderRow("文字大小", value: Bindable(prefs).fontSize, range: 18...42, step: 1, suffix: "pt")
-                sliderRow("窗口宽度", value: Bindable(prefs).overlayWidth, range: 320...920, step: 20, suffix: "pt")
+                Toggle("按当前歌词自适应大小", isOn: Bindable(prefs).overlayAdaptiveSize)
+                sliderRow(prefs.overlayAdaptiveSize ? "最大宽度" : "窗口宽度", value: Bindable(prefs).overlayWidth, range: 320...920, step: 20, suffix: "pt")
+                if prefs.overlayAdaptiveSize {
+                    sliderRow("最小宽度", value: Binding(get: { min(prefs.overlayMinimumWidth, prefs.overlayWidth) },
+                        set: { prefs.overlayMinimumWidth = $0 }), range: 320...max(320, prefs.overlayWidth), step: 20, suffix: "pt")
+                    Text("长句及时扩展，短句稳定后收缩。顶部和水平中心保持固定，连续追加文字时预留空间。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 sliderRow("背景浓度", value: Bindable(prefs).overlayBackgroundStrength, range: 0...0.28, step: 0.02, suffix: "%", multiplier: 100)
             }
             settingsGroup("辅助文字") {
@@ -149,6 +156,20 @@ struct PreferencesView: View {
                 }
                 Text("同时遵循系统的减少动态效果和降低透明度设置。")
                     .font(.caption).foregroundStyle(.secondary)
+            }
+            settingsGroup("逐字动效") {
+                Toggle("逐字轻微放大", isOn: Bindable(prefs).lyricWordLift)
+                Toggle("长音辉光", isOn: Bindable(prefs).lyricGlow)
+                Toggle("HDR 辉光增强", isOn: Bindable(prefs).lyricHDR).disabled(!prefs.lyricGlow)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack { Text("HDR 亮度"); Spacer(); Text(String(format: "%.1f×", prefs.lyricHDRBrightness)).foregroundStyle(.secondary) }
+                    Slider(value: Bindable(prefs).lyricHDRBrightness, in: 1...4, step: 0.1).accessibilityLabel("HDR 亮度")
+                }.disabled(!prefs.lyricGlow || !prefs.lyricHDR)
+                Text("应用于主窗口和悬浮窗。慢唱或拖长的词会柔和放大、发光，未唱部分保持接近原字号。HDR 默认关闭，亮度效果取决于显示器和系统可用亮度。")
+                    .font(.caption).foregroundStyle(.secondary)
+                Text("需要歌词本身含有逐字时间；减少动态效果时保留同步提亮，关闭放大和辉光。")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("预览动效") { openWindow(id: "preview") }
             }
             if !prefs.blockedTracks.isEmpty || !prefs.blockedAlbums.isEmpty {
                 settingsGroup("已停用的歌词搜索") {

@@ -17,6 +17,7 @@ final class AppModel {
     var showSearch = false
     var showLibrary = false
     var mainWindowVisible = false
+    private(set) var playbackControlPosition = 0.0
     var artwork: NSImage?
     var library: [LyricsCache.Entry] = []
     var libraryLoading = false
@@ -39,6 +40,7 @@ final class AppModel {
         bridge.onSnapshot = { [weak self] snapshot in
             guard let self else { return }
             self.session.accept(snapshot, shouldSearch: !self.lyricsBlocked(for: snapshot.track))
+            self.playbackControlPosition = self.session.position
             self.updateArtwork(self.session.track)
         }
         bridge.onError = { [weak self] error in
@@ -73,9 +75,15 @@ final class AppModel {
             while !Task.isCancelled {
                 guard let self else { return }
                 self.session.tick()
+                // Native sliders need far fewer updates than syllable drawing.
+                // Keep the lyric clock precise without relaying every frame
+                // through AppKit's progress-control layout and accessibility.
+                if abs(self.session.position - self.playbackControlPosition) >= 0.2 || !self.session.isPlaying {
+                    self.playbackControlPosition = self.session.position
+                }
                 let visible = self.mainWindowVisible || self.overlay?.isRenderingLyrics == true
-                let wordTimed = self.session.documentHasWordTiming && !self.preferences.reduceMotion
-                let interval = !self.session.isPlaying ? 500 : !visible ? 250 : wordTimed ? 50 : 100
+                let interval = LyricTickCadence.milliseconds(playing: self.session.isPlaying, visible: visible,
+                    document: self.session.document, position: self.session.position)
                 do { try await Task.sleep(for: .milliseconds(interval)) } catch { return }
             }
         }
@@ -100,6 +108,7 @@ final class AppModel {
     }
     func seek(_ time: Double) {
         session.seek(to: time)
+        playbackControlPosition = session.position
         bridge.send(.seek(time))
     }
 

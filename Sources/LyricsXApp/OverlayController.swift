@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import Observation
+import QuartzCore
 import LyricsXCore
 
 final class DraggableOverlayPanel: NSPanel {
@@ -30,6 +31,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private let glass = NSGlassEffectView()
     private let content: NSHostingView<OverlayView>
     private let root = NSView()
+    private let tint = NSView()
+    private let viewport: OverlayViewport
     private let controls: NSHostingView<OverlayControlStrip>
     private unowned let model: AppModel
     private let frameAutosaveName: String?
@@ -44,13 +47,23 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private var dragging = false
     private var resizing = false
     private var restoring = true
-    private var anchorCenter: NSPoint?
+    private var anchorTop: NSPoint?
+    private var sizingPolicy = OverlaySizingPolicy()
+    private var lastSizingConfiguration: [Double] = []
+    private var resizeGeneration = 0
+    private var sizingDocument: UUID?
+    private var sizingIndex: Int?
+    private var sizingConversion = ""
+    private var desiredSize = NSSize.zero
     private var hoverTimer: Timer?
     private var screenObserver: NSObjectProtocol?
+    private var accessibilityObserver: NSObjectProtocol?
 
     var isRenderingLyrics: Bool { lastVisible && !hoverHidden && !model.overlayUsesCompactPresentation }
     var controlsView: NSView { controls }
+    var lyricHostingView: NSView { content }
     private var positionDefaultsKey: String? { frameAutosaveName.map { "LyricsX.OverlayPosition.\($0)" } }
+    private var topDefaultsKey: String? { frameAutosaveName.map { "LyricsX.OverlayTop.\($0)" } }
     private var centerDefaultsKey: String? { frameAutosaveName.map { "LyricsX.OverlayCenter.\($0)" } }
 
     init(model: AppModel, frameAutosaveName: String? = "LyricsXModernOverlay") {
@@ -60,7 +73,9 @@ final class OverlayController: NSObject, NSWindowDelegate {
             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         controlPanel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 134, height: 34),
             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        content = NSHostingView(rootView: OverlayView(model: model))
+        let viewport = OverlayViewport(width: model.preferences.overlayWidth)
+        self.viewport = viewport
+        content = NSHostingView(rootView: OverlayView(model: model, viewport: viewport))
         controls = NSHostingView(rootView: OverlayControlStrip(model: model))
         super.init()
         for window in [panel as NSPanel, controlPanel] {
@@ -77,6 +92,14 @@ final class OverlayController: NSObject, NSWindowDelegate {
         panel.delegate = self
         panel.onDragActivity = { [weak self] dragging in
             guard let self else { return }
+            if dragging && self.resizing {
+                self.resizeGeneration += 1
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0
+                    self.panel.animator().setFrame(self.panel.frame, display: true)
+                }
+                self.resizing = false
+            }
             self.dragging = dragging
             self.refreshAppearance()
             if !dragging { self.saveFrame() }
@@ -101,11 +124,17 @@ final class OverlayController: NSObject, NSWindowDelegate {
         glass.frame = root.bounds.insetBy(dx: 6, dy: 6)
         glass.autoresizingMask = [.width, .height]
         content.frame = root.bounds
-        content.autoresizingMask = [.width, .height]
+        content.autoresizingMask = []
+        content.sizingOptions = []
         content.wantsLayer = true
         content.layer?.backgroundColor = NSColor.clear.cgColor
         root.addSubview(backdrop)
         root.addSubview(glass)
+        tint.wantsLayer = true
+        tint.layer?.cornerRadius = 24
+        tint.frame = root.bounds.insetBy(dx: 6, dy: 6)
+        tint.autoresizingMask = [.width, .height]
+        root.addSubview(tint)
         root.addSubview(content)
         panel.contentView = root
         // Draggable lyrics and controls share a single window/render surface.
@@ -120,11 +149,15 @@ final class OverlayController: NSObject, NSWindowDelegate {
         controlPanel.setAccessibilityParent(panel)
         panel.setAccessibilityChildren([content])
         let restoredPosition: Bool
-        // Restore the previous dimensions before migrating an old origin. The
-        // compact and lyric layouts now share one persistent center anchor.
+        // Migrate the previous center/origin using the saved frame's top edge.
+        // All later sizes share a persistent top-center anchor.
         let restoredLegacyFrame = frameAutosaveName.map { panel.setFrameUsingName($0) } ?? false
-        if let key = centerDefaultsKey, let value = UserDefaults.standard.string(forKey: key) {
-            anchorCenter = NSPointFromString(value)
+        if let key = topDefaultsKey, let value = UserDefaults.standard.string(forKey: key) {
+            anchorTop = NSPointFromString(value)
+            restoredPosition = true
+        } else if let key = centerDefaultsKey, let value = UserDefaults.standard.string(forKey: key) {
+            let center = NSPointFromString(value)
+            anchorTop = NSPoint(x: center.x, y: center.y + panel.frame.height / 2)
             restoredPosition = true
         } else if let key = positionDefaultsKey,
            let value = UserDefaults.standard.string(forKey: key) {
@@ -136,10 +169,13 @@ final class OverlayController: NSObject, NSWindowDelegate {
         if !restoredPosition, let screen = NSScreen.main {
             panel.setFrameOrigin(NSPoint(x: screen.visibleFrame.midX - panel.frame.width / 2, y: screen.visibleFrame.minY + 90))
         }
-        if anchorCenter == nil { anchorCenter = NSPoint(x: panel.frame.midX, y: panel.frame.midY) }
+        if anchorTop == nil { anchorTop = NSPoint(x: panel.frame.midX, y: panel.frame.maxY) }
         screenObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.restoreOnScreen() }
         }
+        accessibilityObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in Task { @MainActor in self?.sync() } }
         restoreOnScreen()
         observeConfiguration()
         restoring = false
@@ -156,8 +192,10 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     func stop() {
         stopped = true
+        resizeGeneration += 1
         hoverTimer?.invalidate(); hoverTimer = nil
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
+        if let accessibilityObserver { NSWorkspace.shared.notificationCenter.removeObserver(accessibilityObserver) }
         controlPanel.orderOut(nil); panel.orderOut(nil)
     }
 
@@ -179,25 +217,13 @@ final class OverlayController: NSObject, NSWindowDelegate {
         panel.contentDragEnabled = !prefs.overlayLocked && !prefs.overlayClickThrough
         if panel.ignoresMouseEvents != prefs.overlayClickThrough { panel.ignoresMouseEvents = prefs.overlayClickThrough }
         setControlsDetached(prefs.overlayClickThrough)
-        let width = min(1000, max(320, prefs.overlayWidth))
-        let secondaryHeight = prefs.overlaySecondaryMode.reservedHeight(translationSize: prefs.translationFontSize,
-            nextSize: prefs.nextLineFontSize, primarySpacing: prefs.overlayPrimarySpacing, secondarySpacing: prefs.overlaySecondarySpacing)
-        let size = model.overlayUsesCompactPresentation
-            ? NSSize(width: min(width, 400), height: 108)
-            : NSSize(width: width, height: max(110, prefs.fontSize * 2.3 + 46 + secondaryHeight))
-        if lastSize != size {
-            lastSize = size
-            resizing = true
-            let center = anchorCenter ?? NSPoint(x: panel.frame.midX, y: panel.frame.midY)
-            panel.setFrame(NSRect(x: center.x - size.width / 2, y: center.y - size.height / 2,
-                                 width: size.width, height: size.height), display: true)
-            restoreOnScreen()
-            resizing = false
-        }
+        tint.layer?.backgroundColor = (NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
+            ? NSColor(white: 0.12, alpha: 1) : NSColor.black.withAlphaComponent(prefs.overlayBackgroundStrength)).cgColor
+        updateSizing()
         let needsHoverTracking = visible
         if needsHoverTracking && hoverTimer == nil {
             let timer = Timer(timeInterval: 0.08, repeats: true) { [weak self] _ in
-                MainActor.assumeIsolated { self?.refreshAppearance() }
+                MainActor.assumeIsolated { self?.refreshAppearance(); self?.updateSizing() }
             }
             timer.tolerance = 0.02
             RunLoop.main.add(timer, forMode: .common)
@@ -217,6 +243,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = prefs.reduceMotion ? 0 : 0.16
                 content.animator().alphaValue = hidden ? 0 : 1
+                tint.animator().alphaValue = hidden ? 0 : 1
                 backdrop.animator().alphaValue = hidden ? 0 : 0.55
                 glass.animator().alphaValue = hidden ? 0 : 1
             }
@@ -273,25 +300,81 @@ final class OverlayController: NSObject, NSWindowDelegate {
         }
     }
 
+    private func updateSizing() {
+        guard !stopped, !dragging else { return }
+        let p = model.preferences
+        let maximum = min(1000, max(320, p.overlayWidth))
+        let compact = model.overlayUsesCompactPresentation
+        // No observation of the 60 Hz clock: only a line/setting change can
+        // request a new size. The existing hover timer expires shrink holds.
+        let document = model.session.document, index = model.session.currentLineIndex
+        let configuration = [maximum, p.overlayMinimumWidth, p.fontSize, p.translationFontSize,
+            p.nextLineFontSize, Double(OverlaySecondaryMode.allCases.firstIndex(of: p.overlaySecondaryMode) ?? 0),
+            p.overlayAdaptiveSize ? 1 : 0, compact ? 1 : 0, p.showTranslation ? 1 : 0]
+        let changed = configuration != lastSizingConfiguration
+        if changed || document?.id != sizingDocument || index != sizingIndex || p.conversion != sizingConversion {
+            if compact { desiredSize = NSSize(width: min(maximum, 400), height: 108) }
+            else if p.overlayAdaptiveSize, let document, let index {
+                desiredSize = OverlayTextMeasure.desiredSize(document: document, index: index, preferences: p, maximumWidth: maximum)
+            } else { desiredSize = NSSize(width: maximum, height: OverlayLayoutMetrics.height(preferences: p)) }
+            sizingDocument = document?.id; sizingIndex = index; sizingConversion = p.conversion
+        }
+        lastSizingConfiguration = configuration
+        let size = sizingPolicy.resolve(desiredSize, at: ProcessInfo.processInfo.systemUptime, immediate: changed || !lastVisible)
+        let canvas = NSSize(width: maximum, height: max(108, OverlayLayoutMetrics.height(preferences: p)))
+        if content.frame.size != canvas { content.setFrameSize(canvas) }
+        positionContent()
+        guard size != lastSize else { return }
+        lastSize = size
+        viewport.width = size.width
+        let target = anchoredFrame(size: size)
+        resizeGeneration += 1
+        let generation = resizeGeneration
+        resizing = true
+        let animate = !restoring && panel.isVisible && !p.reduceMotion && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = animate ? (size.width > panel.frame.width || size.height > panel.frame.height ? 0.28 : 0.42) : 0
+            context.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 0, 0.18, 1)
+            if animate { panel.animator().setFrame(target, display: true) }
+            else { panel.setFrame(target, display: true) }
+        } completionHandler: { [weak self] in
+            Task { @MainActor in
+                guard let self, self.resizeGeneration == generation, !self.stopped else { return }
+                self.resizing = false
+                self.positionContent(); self.positionControlPanel()
+            }
+        }
+        if !animate { resizing = false }
+        positionContent(); positionControlPanel()
+    }
+
+    private func anchoredFrame(size: NSSize) -> NSRect {
+        let top = anchorTop ?? NSPoint(x: panel.frame.midX, y: panel.frame.maxY)
+        let screen = NSScreen.screens.first { $0.frame.contains(top) } ?? NSScreen.main
+        return OverlayAnchor(topCenter: top).frame(size: size, in: screen?.visibleFrame ?? panel.frame)
+    }
+
     func restoreOnScreen() {
-        let center = anchorCenter ?? NSPoint(x: panel.frame.midX, y: panel.frame.midY)
-        let anchoredScreen = NSScreen.screens.first(where: { $0.visibleFrame.contains(center) })
-        guard let screen = anchoredScreen ?? NSScreen.main else { return }
-        var frame = panel.frame
-        frame.size.width = min(frame.width, screen.visibleFrame.width)
-        frame.origin = NSPoint(x: center.x - frame.width / 2, y: center.y - frame.height / 2)
-        frame.origin.x = max(screen.visibleFrame.minX, min(frame.minX, screen.visibleFrame.maxX - frame.width))
-        frame.origin.y = max(screen.visibleFrame.minY, min(frame.minY, screen.visibleFrame.maxY - frame.height))
+        let frame = anchoredFrame(size: panel.frame.size)
         let wasResizing = resizing; resizing = true
         if frame != panel.frame { panel.setFrame(frame, display: true) }
         resizing = wasResizing
-        // A disconnected monitor needs a new usable anchor. Merely clamping a
-        // larger lyric layout at the edge must not overwrite the compact anchor.
-        if anchoredScreen == nil {
-            anchorCenter = NSPoint(x: frame.midX, y: frame.midY)
+        if let anchorTop, !NSScreen.screens.contains(where: { $0.frame.contains(anchorTop) }) {
+            self.anchorTop = NSPoint(x: frame.midX, y: frame.maxY)
             if !restoring { saveFrame() }
         }
-        positionControlPanel()
+        positionContent(); positionControlPanel()
+    }
+
+    private func positionContent() {
+        // Move the persistent maximum-size canvas; never resize its bounds for
+        // animated window frames. SwiftUI typography and HDR surfaces survive.
+        content.setFrameOrigin(NSPoint(x: (root.bounds.width - content.frame.width) / 2,
+                                       y: root.bounds.height - content.frame.height))
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        positionContent(); positionControlPanel()
     }
 
     private func positionControlPanel() {
@@ -307,8 +390,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
     private func saveFrame() {
         guard !restoring else { return }
-        anchorCenter = NSPoint(x: panel.frame.midX, y: panel.frame.midY)
-        if let key = centerDefaultsKey, let center = anchorCenter { UserDefaults.standard.set(NSStringFromPoint(center), forKey: key) }
+        anchorTop = NSPoint(x: panel.frame.midX, y: panel.frame.maxY)
+        if let key = topDefaultsKey, let anchorTop { UserDefaults.standard.set(NSStringFromPoint(anchorTop), forKey: key) }
         if let frameAutosaveName { panel.saveFrame(usingName: frameAutosaveName) }
         if let key = positionDefaultsKey { UserDefaults.standard.set(NSStringFromPoint(panel.frame.origin), forKey: key) }
     }
@@ -317,25 +400,12 @@ final class OverlayController: NSObject, NSWindowDelegate {
 
 struct OverlayView: View {
     @Bindable var model: AppModel
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    private var line: LyricLine? {
-        guard let doc = model.session.document, let index = model.session.currentLineIndex, doc.lines.indices.contains(index) else { return nil }
-        return doc.lines[index]
-    }
-    private var translation: String? {
-        guard model.preferences.showTranslation, line?.hasTranslation == true, let value = line?.translation else { return nil }
-        return model.preferences.text(value)
-    }
-    private var nextLine: String? {
-        guard let doc = model.session.document, let index = model.session.currentLineIndex, doc.lines.indices.contains(index + 1) else { return nil }
-        return model.preferences.text(doc.lines[index + 1].text)
-    }
-    private var lyricIdentity: String {
-        "\(model.session.track?.id ?? "idle")-\(model.session.document?.id.description ?? placeholder)-\(line?.id ?? -1)"
-    }
+    var viewport: OverlayViewport
+    @State private var windowVisible = false
     var body: some View {
-        let secondary = model.preferences.overlaySecondaryMode.content(translation: translation, next: nextLine)
+        let maximum = min(1000, max(320, model.preferences.overlayWidth))
+        let compact = model.overlayUsesCompactPresentation
+        let height = presentationHeight(maximum: maximum)
         VStack(spacing: 0) {
             if model.overlayUsesCompactPresentation {
                 // Reserve the same top strip for controls in both layouts.
@@ -358,7 +428,7 @@ struct OverlayView: View {
                         }
                     }.shadow(color: .black.opacity(0.8), radius: 2, y: 1)
                     Spacer(minLength: 0)
-                }.frame(maxWidth: .infinity, alignment: .leading)
+                }.frame(width: max(260, viewport.width - 60), alignment: .leading)
                 Spacer(minLength: 2)
             } else {
                 HStack(spacing: 6) {
@@ -366,30 +436,16 @@ struct OverlayView: View {
                     if let artist = model.session.track?.artist, !artist.isEmpty { Text("· " + artist).lineLimit(1).opacity(0.85) }
                     Spacer(minLength: 4)
                     Color.clear.frame(width: 126, height: 30)
-                }.font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.92)).frame(height: 30)
+                }.font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.92)).frame(width: max(260, viewport.width - 60), height: 30)
                 Spacer(minLength: 4)
                 ZStack {
-                  VStack(spacing: 0) {
-                    if let line, let doc = model.session.document {
-                        LiveLyricText(session: model.session, line: line, document: doc, active: true,
-                            text: line.text.isEmpty ? "•••" : model.preferences.text(line.text))
-                            .font(.system(size: model.preferences.fontSize, weight: .semibold)).tracking(-0.4)
-                            .multilineTextAlignment(.center).lineLimit(2).minimumScaleFactor(0.6)
+                    if let doc = model.session.document, let index = model.session.currentLineIndex {
+                        OverlayLyricsContent(preferences: model.preferences, document: doc, index: index,
+                                             lyricTime: { doc.lyricTime(for: model.session.position) },
+                                             renderTime: { doc.lyricTime(for: model.session.presentationPosition()) },
+                                             playing: model.session.isPlaying && windowVisible,
+                                             adaptiveCanvasWidth: model.preferences.overlayAdaptiveSize ? maximum - 60 : nil).id(doc.id)
                     } else { Text(placeholder) }
-                if let translation = secondary.translation {
-                    Text(translation).font(.system(size: model.preferences.translationFontSize, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.95)).lineLimit(1).minimumScaleFactor(0.75)
-                        .shadow(color: .black.opacity(0.9), radius: 2, y: 1).padding(.top, model.preferences.overlayPrimarySpacing)
-                }
-                if let nextLine = secondary.next {
-                    Text(nextLine).font(.system(size: model.preferences.nextLineFontSize, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.85)).lineLimit(1).minimumScaleFactor(0.75)
-                        .shadow(color: .black.opacity(0.9), radius: 2, y: 1)
-                        .padding(.top, secondary.translation != nil ? model.preferences.overlaySecondarySpacing : model.preferences.overlayPrimarySpacing)
-                }
-                  }.frame(maxWidth: .infinity)
-                    .lyricArrival(trigger: lyricIdentity, reduced: reduceMotion || model.preferences.reduceMotion,
-                                  distance: min(20, max(10, model.preferences.fontSize * 0.55)))
                 }.font(.system(size: model.preferences.fontSize, weight: .semibold))
                     .shadow(color: .black.opacity(0.8), radius: 1.5, y: 1)
                     .shadow(color: .black.opacity(0.35), radius: 5, y: 1)
@@ -397,8 +453,18 @@ struct OverlayView: View {
             }
         }.padding(.horizontal, 24).padding(.vertical, 12)
             .foregroundStyle(.white)
-            .background(reduceTransparency ? Color(white: 0.12) : .black.opacity(model.preferences.overlayBackgroundStrength), in: .rect(cornerRadius: 24))
             .padding(6)
+            .frame(width: maximum, height: compact ? 108 : height)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .background(WindowVisibilityReader { windowVisible = $0 })
+    }
+    private func presentationHeight(maximum: Double) -> Double {
+        guard model.preferences.overlayAdaptiveSize, let document = model.session.document,
+              let index = model.session.currentLineIndex else { return OverlayLayoutMetrics.height(preferences: model.preferences) }
+        let p = model.preferences
+        return OverlayLayoutMetrics.chromeHeight + OverlayTextMeasure.primaryHeight(document: document, index: index, preferences: p, canvasWidth: maximum - 60)
+            + p.overlaySecondaryMode.reservedHeight(translationSize: p.translationFontSize, nextSize: p.nextLineFontSize,
+                primarySpacing: p.overlayPrimarySpacing, secondarySpacing: p.overlaySecondarySpacing)
     }
     private var placeholder: String {
         if model.lyricsBlocked { return "已停用此歌曲歌词" }

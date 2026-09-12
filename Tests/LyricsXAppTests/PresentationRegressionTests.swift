@@ -128,15 +128,17 @@ private let overlayLyrics = LyricsDocument(title: "Overlay Song", artist: "Artis
         UserDefaults.standard.removeObject(forKey: "NSWindow Frame \(autosaveName)")
         UserDefaults.standard.removeObject(forKey: "LyricsX.OverlayPosition.\(autosaveName)")
         UserDefaults.standard.removeObject(forKey: "LyricsX.OverlayCenter.\(autosaveName)")
+        UserDefaults.standard.removeObject(forKey: "LyricsX.OverlayTop.\(autosaveName)")
     }
 
-    @Test func compactCardAndTimedLyricsKeepCenterAndRestoreAfterEdgeClamping() async throws {
+    @Test func compactCardAndTimedLyricsKeepTopAndRestoreAfterEdgeClamping() async throws {
         _ = NSApplication.shared
         let suite = "LyricsXTests-" + UUID().uuidString
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let prefs = Preferences(defaults: defaults)
         prefs.fontSize = 42; prefs.overlayWidth = 600
+        prefs.overlayAdaptiveSize = false; prefs.reduceMotion = true
         let model = AppModel(repository: EmptyRepository(), preferences: prefs)
         model.session.accept(.init(track: overlayTrack, position: 10, isPlaying: true), shouldSearch: false)
         let name = "LyricsXTestOverlay-" + UUID().uuidString
@@ -149,7 +151,7 @@ private let overlayLyrics = LyricsDocument(title: "Overlay Song", artist: "Artis
         let screen = try #require(NSScreen.main)
         let target = NSPoint(x: screen.visibleFrame.maxX - 404, y: screen.visibleFrame.minY + 100)
         overlay.panel.setFrameOrigin(target)
-        let center = NSPoint(x: overlay.panel.frame.midX, y: overlay.panel.frame.midY)
+        let top = NSPoint(x: overlay.panel.frame.midX, y: overlay.panel.frame.maxY)
         overlay.windowDidMove(.init(name: NSWindow.didMoveNotification, object: overlay.panel))
         for _ in 0..<3 {
             model.session.use(overlayLyrics, persist: false)
@@ -161,9 +163,10 @@ private let overlayLyrics = LyricsDocument(title: "Overlay Song", artist: "Artis
             #expect(model.overlayUsesCompactPresentation && overlay.panel.frame.size == NSSize(width: 400, height: 108))
             #expect(overlay.panel.frame.origin == target)
             #expect(UserDefaults.standard.string(forKey: "LyricsX.OverlayPosition.\(name)") == NSStringFromPoint(target))
-            #expect(UserDefaults.standard.string(forKey: "LyricsX.OverlayCenter.\(name)") == NSStringFromPoint(center))
+            #expect(UserDefaults.standard.string(forKey: "LyricsX.OverlayTop.\(name)") == NSStringFromPoint(top))
         }
         UserDefaults.standard.removeObject(forKey: "LyricsX.OverlayCenter.\(name)")
+        UserDefaults.standard.removeObject(forKey: "LyricsX.OverlayTop.\(name)")
     }
 
     @Test(.enabled(if: ProcessInfo.processInfo.environment["LYRICSX_RENDER_QA"] != nil))
@@ -285,7 +288,7 @@ private let overlayLyrics = LyricsDocument(title: "Overlay Song", artist: "Artis
     @Test func previewDataCannotReplaceTheProductionSession() {
         let model = AppModel(repository: EmptyRepository())
         model.bridge.onSnapshot?(.init(track: .init(playerID: "test", playerName: "Test", title: "Real song"), position: 10, isPlaying: true))
-        let preview = LyricsPreviewView()
+        let preview = LyricsPreviewView(preferences: model.preferences)
         _ = preview
         _ = DemoContent.document
         #expect(model.session.track?.title == "Real song")

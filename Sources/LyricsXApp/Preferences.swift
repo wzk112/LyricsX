@@ -14,6 +14,8 @@ final class Preferences {
     var hideOverlayOnHover: Bool { didSet { save("hideOverlayOnHover", hideOverlayOnHover) } }
     var overlayBackgroundStrength: Double { didSet { save("overlayBackgroundStrength", overlayBackgroundStrength) } }
     var overlayWidth: Double { didSet { save("overlayWidth", overlayWidth) } }
+    var overlayAdaptiveSize: Bool { didSet { save("overlayAdaptiveSize", overlayAdaptiveSize) } }
+    var overlayMinimumWidth: Double { didSet { save("overlayMinimumWidth", overlayMinimumWidth) } }
     var fontSize: Double { didSet { save("fontSize", fontSize) } }
     var translationFontSize: Double { didSet { save("translationFontSize", translationFontSize) } }
     var nextLineFontSize: Double { didSet { save("nextLineFontSize", nextLineFontSize) } }
@@ -29,6 +31,12 @@ final class Preferences {
     var blockedAlbums: [String] { didSet { save("blockedAlbums", blockedAlbums) } }
     var hideWhenPaused: Bool { didSet { save("hideWhenPaused", hideWhenPaused) } }
     var reduceMotion: Bool { didSet { save("reduceMotion", reduceMotion) } }
+    var lyricWordLift: Bool { didSet { save("lyricWordLift", lyricWordLift) } }
+    var lyricGlow: Bool { didSet { save("lyricGlow", lyricGlow) } }
+    var lyricHDR: Bool { didSet { save("lyricHDR", lyricHDR) } }
+    var lyricHDRBrightness: Double { didSet { save("lyricHDRBrightness", lyricHDRBrightness) } }
+    var lyricEmphasis: LyricEmphasisOptions { .init(lift: lyricWordLift, glow: lyricGlow, hdr: lyricHDR,
+        hdrBrightness: lyricHDRBrightness, reduced: reduceMotion) }
     var conversion: String { didSet { save("conversion", conversion) } }
     var playerMode: PlayerMode { didSet { save("playerMode", playerMode.rawValue) } }
     var disabledSources: [String] { didSet { save("disabledSources", disabledSources) } }
@@ -53,6 +61,8 @@ final class Preferences {
             d.set(1, forKey: "compactOverlayVersion")
         }
         overlayWidth = d.object(forKey: "overlayWidth") as? Double ?? 520
+        overlayAdaptiveSize = d.object(forKey: "overlayAdaptiveSize") as? Bool ?? true
+        overlayMinimumWidth = min(920, max(320, d.object(forKey: "overlayMinimumWidth") as? Double ?? 320))
         fontSize = d.object(forKey: "fontSize") as? Double ?? 26
         translationFontSize = d.object(forKey: "translationFontSize") as? Double ?? 13
         nextLineFontSize = d.object(forKey: "nextLineFontSize") as? Double ?? 12
@@ -68,6 +78,10 @@ final class Preferences {
         blockedAlbums = d.stringArray(forKey: "blockedAlbums") ?? []
         hideWhenPaused = d.bool(forKey: "hideWhenPaused")
         reduceMotion = d.bool(forKey: "reduceMotion")
+        lyricWordLift = d.object(forKey: "lyricWordLift") as? Bool ?? true
+        lyricGlow = d.object(forKey: "lyricGlow") as? Bool ?? true
+        lyricHDR = d.bool(forKey: "lyricHDR")
+        lyricHDRBrightness = min(4, max(1, d.object(forKey: "lyricHDRBrightness") as? Double ?? 1.6))
         conversion = d.string(forKey: "conversion") ?? "原文"
         playerMode = PlayerMode(rawValue: d.string(forKey: "playerMode") ?? "automatic") ?? .automatic
         disabledSources = d.stringArray(forKey: "disabledSources") ?? []

@@ -67,10 +67,38 @@ struct LiveLyricText: View {
     let document: LyricsDocument
     let active: Bool
     let text: String
+    var effects = LyricEmphasisOptions()
+    var arrival: LyricLinePresentation?
     var body: some View {
-        if active && line.hasWordTiming {
-            WordHighlight(line: line, time: document.lyricTime(for: session.position), active: true, text: text)
+        if active && (line.hasWordTiming || arrival != nil) {
+            let time = document.lyricTime(for: session.position)
+            LyricRenderTimeline(running: session.isPlaying && LyricRenderTimelineActivity.needsFrames(line: line, time: time, arrival: arrival),
+                                sampledTime: time, preciseTime: { document.lyricTime(for: session.presentationPosition()) }) { frameTime in
+                WordHighlight(line: line, time: frameTime, active: true, text: text, effects: effects, arrival: arrival)
+            }
         } else { Text(text) }
+    }
+}
+
+/// Only the currently drawn lyric gets display-rate updates. Sliders, artwork,
+/// searching, and the session's line lookup keep their independent lower rate.
+struct LyricRenderTimeline<Content: View>: View {
+    let running: Bool
+    let sampledTime: Double
+    let preciseTime: () -> Double
+    @ViewBuilder let content: (Double) -> Content
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 60, paused: !running)) { _ in
+            content(running ? preciseTime() : sampledTime)
+        }
+    }
+}
+
+enum LyricRenderTimelineActivity {
+    static func needsFrames(line: LyricLine, time: Double, arrival: LyricLinePresentation?) -> Bool {
+        if line.words.contains(where: { $0.end > time && $0.start <= time + 0.1 }) { return true }
+        return arrival.map { $0.stablePrefixCount < line.text.count && time < $0.start + $0.duration } ?? false
     }
 }
 
@@ -85,32 +113,6 @@ struct SymbolButton: View {
             .buttonStyle(.plain).foregroundStyle(active ? .white : .white.opacity(inactiveOpacity))
             .background(active ? .white.opacity(0.1) : .clear, in: .circle)
             .contentShape(.circle).help(help).accessibilityLabel(help)
-    }
-}
-
-struct WordHighlight: View {
-    let line: LyricLine
-    let time: Double
-    let active: Bool
-    let text: String
-    var body: some View {
-        if active, line.hasWordTiming, text == line.text {
-            // Character-level opacity follows actual word tags, not a guessed per-line duration.
-            Text(attributedText)
-        } else { Text(text) }
-    }
-    private var attributedText: AttributedString {
-        var result = AttributedString()
-        var cursor = text.startIndex
-        for (range, word) in line.wordTimingRanges {
-            if cursor < range.lowerBound { result.append(AttributedString(String(text[cursor..<range.lowerBound]))) }
-            var fragment = AttributedString(word.text)
-            fragment.foregroundColor = .white.opacity(0.40 + 0.60 * word.progress(at: time))
-            result.append(fragment)
-            cursor = range.upperBound
-        }
-        if cursor < text.endIndex { result.append(AttributedString(String(text[cursor...]))) }
-        return result
     }
 }
 

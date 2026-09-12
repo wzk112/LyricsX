@@ -21,6 +21,18 @@ private final class ControlledRepository: LyricsRepository, @unchecked Sendable 
 }
 
 @Suite @MainActor struct SessionTests {
+    @Test func displayFramesAdvanceBetweenTicksAndFollowPauseAndSeek() {
+        let session = LyricsSession(repository: ControlledRepository())
+        session.accept(.init(track: first, position: 10, isPlaying: true, sampledAt: 100), now: 100, shouldSearch: false)
+        #expect(session.position == 10)
+        #expect(abs(session.presentationPosition(at: 100 + 1.0 / 60) - (10 + 1.0 / 60)) < 0.00001)
+        #expect(session.position == 10) // Drawing never mutates the session.
+        session.accept(.init(track: first, position: 10.1, isPlaying: false, sampledAt: 100.1), now: 100.1, shouldSearch: false)
+        #expect(session.presentationPosition(at: 102) == 10.1)
+        session.seek(to: 30, now: 102)
+        #expect(session.presentationPosition(at: 103) == 30)
+        session.stop()
+    }
     @Test func shortInstrumentalPlaceholderPhrasesAreDetectedWithoutHidingRealLyrics() {
         let chinese = LyricsDocument(lines: [.init(id: 0, time: 0, text: "♪ 纯音乐，请欣赏 ♪")])
         let english = LyricsDocument(lines: [.init(id: 0, time: 0, text: "No lyrics available")])

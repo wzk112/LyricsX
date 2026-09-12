@@ -156,7 +156,8 @@ private struct RankedFixtureRepository: LyricsRepository {
     for order in [values, Array(values.reversed())] {
         let session = LyricsSession(repository: RankedFixtureRepository(values: order))
         session.accept(.init(track: rankingTrack, position: 0, isPlaying: false))
-        let deadline = ContinuousClock.now.advanced(by: .seconds(1))
+        // Native rendering tests share MainActor; this guard is not a search latency budget.
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
         while session.candidates.count < order.count, ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(5))
         }

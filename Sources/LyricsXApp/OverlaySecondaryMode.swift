@@ -36,9 +36,9 @@ enum OverlaySecondaryMode: String, CaseIterable, Identifiable {
         switch self {
         case .none: 0
         case .translation: translationSize * 1.4 + primarySpacing
-        case .next: nextSize * 1.4 + primarySpacing
-        case .either: max(translationSize, nextSize) * 1.4 + primarySpacing
-        case .both: (translationSize + nextSize) * 1.4 + primarySpacing + secondarySpacing
+        case .next: nextSize * 2.8 + primarySpacing
+        case .either: max(translationSize * 1.4, nextSize * 2.8) + primarySpacing
+        case .both: translationSize * 1.4 + nextSize * 2.8 + primarySpacing + secondarySpacing
         }
     }
 }

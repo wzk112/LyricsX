@@ -48,14 +48,3 @@ import Testing
         controller.stop()
     }
 }
-
-@Test func fastLyricChangesContinueFromTheVisibleMotionFrame() {
-    let rest = LyricMotion.Frame()
-    let first = rest.arrival(distance: 14)
-    #expect(first.offset == 14 && first.blur > 0 && first.opacity >= 0.5)
-    let moving = LyricMotion.Frame(offset: 4, blur: 0.6, opacity: 0.9)
-    #expect(moving.arrival(distance: 14) == moving)
-    let overshoot = LyricMotion.Frame(offset: -0.4, blur: 0, opacity: 1)
-    #expect(overshoot.arrival(distance: 14) == overshoot)
-    #expect(rest.arrival(distance: 8).offset == 8)
-}

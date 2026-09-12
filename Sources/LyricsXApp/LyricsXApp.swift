@@ -16,7 +16,7 @@ struct LyricsXApp: App {
         Settings {
             PreferencesView(model: model)
         }
-        Window("动效预览", id: "preview") { LyricsPreviewView() }
+        Window("动效预览", id: "preview") { LyricsPreviewView(preferences: model.preferences) }
             .defaultSize(width: 760, height: 480)
         MenuBarExtra(isInserted: $model.preferences.showMenuBarIcon) { MenuBarContent(model: model) } label: {
             HStack(spacing: 5) {
