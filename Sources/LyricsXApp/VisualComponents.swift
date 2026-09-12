@@ -66,7 +66,7 @@ struct LiveLyricText: View {
     let line: LyricLine
     let document: LyricsDocument
     let active: Bool
-    var rendering = true
+    var rendering: () -> Bool = { true }
     let text: String
     var effects = LyricEmphasisOptions()
     var arrival: LyricLinePresentation?
@@ -74,8 +74,9 @@ struct LiveLyricText: View {
         if line.hasWordTiming || arrival != nil {
             // Keep this view identity when a row becomes current. Only active
             // rows observe the session clock; others use the native draw path.
-            let time = active ? document.lyricTime(for: rendering ? session.position : session.presentationPosition()) : 0
-            LyricRenderTimeline(running: rendering && active && session.isPlaying && LyricRenderTimelineActivity.needsFrames(line: line, time: time, arrival: arrival),
+            let visible = active && rendering()
+            let time = active ? document.lyricTime(for: visible ? session.position : session.presentationPosition()) : 0
+            LyricRenderTimeline(running: visible && session.isPlaying && LyricRenderTimelineActivity.needsFrames(line: line, time: time, arrival: arrival),
                                 sampledTime: time, preciseTime: { document.lyricTime(for: session.presentationPosition()) }) { frameTime in
                 WordHighlight(line: line, time: frameTime, active: active, text: text, effects: effects, arrival: arrival)
                     .transaction { $0.animation = nil; $0.disablesAnimations = true }
@@ -90,12 +91,14 @@ struct LyricRenderTimeline<Content: View>: View {
     let running: Bool
     let sampledTime: Double
     let preciseTime: () -> Double
+    var continueFrames: () -> Bool = { true }
     @ViewBuilder let content: (Double) -> Content
+    @State private var frame: UInt64 = 0
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 60, paused: !running)) { _ in
-            content(running ? preciseTime() : sampledTime)
-        }
+        let _ = frame
+        content(running ? preciseTime() : sampledTime)
+            .background(LyricFrameSource(running: running && continueFrames()) { frame &+= 1 }.frame(width: 0, height: 0))
     }
 }
 

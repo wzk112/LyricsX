@@ -5,6 +5,7 @@ enum LyricMotion {
     static let response = 0.82
     static let damping = 0.86
     static let arrivalCurve = UnitCurve.bezier(startControlPoint: .init(x: 0.22, y: 0), endControlPoint: .init(x: 0.18, y: 1))
+    static let overlayArrivalCurve = UnitCurve.bezier(startControlPoint: .init(x: 0.28, y: 0), endControlPoint: .init(x: 0.30, y: 1))
     static var animation: Animation { .spring(response: response, dampingFraction: damping, blendDuration: 0.2) }
 
     static func followResponse(lines: [LyricLine], index: Int?) -> Double {
@@ -48,25 +49,29 @@ private struct LyricArrival<Trigger: Equatable & Sendable>: ViewModifier {
     let trigger: Trigger
     let reduced: Bool
     let distance: Double
+    var visible: () -> Bool
     @State private var clock = LyricArrivalClock()
 
     func body(content: Content) -> some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 60, paused: clock.startedAt == nil || reduced)) { _ in
-            let now = ProcessInfo.processInfo.systemUptime
+        let visible = visible()
+        LyricRenderTimeline(running: clock.startedAt != nil && !reduced && visible,
+                            sampledTime: ProcessInfo.processInfo.systemUptime,
+                            preciseTime: { ProcessInfo.processInfo.systemUptime }) { now in
             let frame = reduced ? LyricMotion.Frame() : clock.frame(at: now)
             content.offset(y: frame.offset * distance / 10).blur(radius: frame.blur).opacity(frame.opacity)
                 .onChange(of: clock.finishedToken(at: now)) { _, token in clock.finish(token) }
         }
         .onChange(of: trigger) { _, _ in
-            if reduced { clock.cancel() } else { clock.start(at: ProcessInfo.processInfo.systemUptime) }
+            if reduced || !visible { clock.cancel() } else { clock.start(at: ProcessInfo.processInfo.systemUptime) }
         }
+        .onChange(of: visible) { _, value in if !value { clock.cancel() } }
         .onChange(of: reduced) { _, value in if value { clock.cancel() } }
         .onDisappear { clock.cancel() }
     }
 }
 
 extension View {
-    func lyricArrival(trigger: some Equatable & Sendable, reduced: Bool, distance: Double = 12) -> some View {
-        modifier(LyricArrival(trigger: trigger, reduced: reduced, distance: distance))
+    func lyricArrival(trigger: some Equatable & Sendable, reduced: Bool, distance: Double = 12, visible: @escaping () -> Bool = { true }) -> some View {
+        modifier(LyricArrival(trigger: trigger, reduced: reduced, distance: distance, visible: visible))
     }
 }

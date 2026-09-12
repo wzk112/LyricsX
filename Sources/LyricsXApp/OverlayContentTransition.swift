@@ -21,7 +21,7 @@ struct OverlayBlurStyle: Equatable {
                        incremental: Bool, lineDuration: Double) -> Self {
         guard old != new else { return .init() }
         guard let old, old.track == new.track, old.document == new.document, old.compact == new.compact else {
-            return .init(radius: 3, duration: 0.48)
+            return .init(radius: 3, duration: 0.52)
         }
         // Appending a suffix already animates just the new glyphs. A full-card
         // blur here would repeatedly obscure the stable prefix at high speed.
@@ -32,7 +32,7 @@ struct OverlayBlurStyle: Equatable {
     func blur(elapsed: Double) -> Double {
         guard duration > 0 else { return 0 }
         let progress = min(1, max(0, elapsed / duration))
-        return radius * (1 - LyricMotion.arrivalCurve.value(at: progress))
+        return radius * (1 - LyricMotion.overlayArrivalCurve.value(at: progress))
     }
 }
 
@@ -53,14 +53,18 @@ struct OverlayContentTransition: ViewModifier {
     func body(content: Content) -> some View {
         let pending = displayed != identity
         let incoming = displayed == nil && !animateInitial ? OverlayBlurStyle() : OverlayBlurStyle.change(from: displayed, to: identity, incremental: incremental, lineDuration: lineDuration)
-        TimelineView(.animation(minimumInterval: 1.0 / 60, paused: reduced || !visible || clock.startedAt == nil)) { _ in
-            let now = ProcessInfo.processInfo.systemUptime
+        LyricRenderTimeline(running: !reduced && visible && clock.startedAt != nil,
+                            sampledTime: ProcessInfo.processInfo.systemUptime,
+                            preciseTime: { ProcessInfo.processInfo.systemUptime }) { now in
             let blur: Double = if let preparingSince {
                 3 * LyricMotion.arrivalCurve.value(at: min(1, max(0, (now - preparingSince) / OverlayPresentation.handoverDuration)))
             } else {
                 pending ? incoming.radius : clock.startedAt.map { style.blur(elapsed: now - $0) } ?? 0
             }
+            let departure = preparingSince.map { LyricEmphasisFrame.smooth((now - $0) / OverlayPresentation.handoverDuration) } ?? 0
             content.blur(radius: reduced || !visible ? 0 : blur)
+                .offset(y: reduced || !visible ? 0 : -12 * departure)
+                .opacity(reduced || !visible ? 1 : 1 - departure)
                 .transaction { $0.animation = nil; $0.disablesAnimations = true }
                 .onChange(of: clock.finishedToken(at: now)) { _, token in clock.finish(token) }
         }

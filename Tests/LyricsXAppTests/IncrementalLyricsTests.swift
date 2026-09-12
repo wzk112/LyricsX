@@ -42,7 +42,7 @@ import LyricsXServices
     }
 }
 
-@Test func nextRowMovesFromItsOldPositionWithoutAnOutgoingLayer() throws {
+@Test func nextRowMovesFromItsOldPositionAndSettlesBeforeTheNextCue() throws {
     let lines = [LyricLine(id: 0, time: 0, text: "First"), .init(id: 1, time: 3, text: "Next"),
                  .init(id: 2, time: 3.1, text: "Next grows"), .init(id: 3, time: 6, text: "Last")]
     let plan = try #require(LyricLinePresentation.make(lines: lines, index: 1))
@@ -75,7 +75,7 @@ import LyricsXServices
     for interval in [0.08, 0.2, 3.0] {
         let lines = [LyricLine(id: 0, time: 0, text: "First"), .init(id: 1, time: interval, text: "Next")]
         let plan = try #require(LyricLinePresentation.make(lines: lines, index: 0))
-        let duration = min(0.42, plan.duration)
+        let duration = min(0.46, plan.duration)
         let first = OverlayAuxiliaryFrame.make(time: 0, plan: plan, changed: true, reduced: false)
         #expect(first.opacity == 0 && first.offset > 0 && first.blur > 0)
         let half = OverlayAuxiliaryFrame.make(time: duration / 2, plan: plan, changed: true, reduced: false)
@@ -95,7 +95,7 @@ import LyricsXServices
     let middle = OverlayMotionFrame.make(time: 0.29, plan: plan, distance: 80, nextScale: 0.5, reduced: false)
     #expect(first.blur == 0.45 && middle.blur > first.blur && middle.blur < 2)
     #expect(abs(middle.offset - 40) > 5 && middle.offset < first.offset)
-    #expect(OverlayMotionFrame.make(time: 0.58, plan: plan, distance: 80, nextScale: 0.5, reduced: false) == .init())
+    #expect(OverlayMotionFrame.make(time: 0.64, plan: plan, distance: 80, nextScale: 0.5, reduced: false) == .init())
     #expect(OverlayMotionFrame.make(time: 0, plan: plan, distance: 80, nextScale: 0.5, reduced: true) == .init())
 }
 
@@ -197,7 +197,7 @@ import LyricsXServices
         default: changed.compact = true
         }
         let style = OverlayBlurStyle.change(from: base, to: changed, incremental: false, lineDuration: 3)
-        #expect(style.radius > 0 && style.radius <= 3 && style.duration <= 0.48)
+        #expect(style.radius > 0 && style.radius <= 3 && style.duration <= 0.52)
         #expect(style.blur(elapsed: 0) == style.radius)
         #expect(style.blur(elapsed: style.duration) == 0)
         let half = style.blur(elapsed: style.duration / 2)

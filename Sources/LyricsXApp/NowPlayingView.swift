@@ -24,7 +24,8 @@ struct NowPlayingView: View {
                     }.padding(.horizontal, 22).padding(.top, 8)
                 } else { expandedPlayer(geometry.size) }
             }
-            .lyricArrival(trigger: model.session.track?.id, reduced: reduceMotion || model.preferences.reduceMotion || !model.mainWindowVisible, distance: 8)
+            .lyricArrival(trigger: model.session.track?.id, reduced: reduceMotion || model.preferences.reduceMotion,
+                          distance: 8, visible: { model.mainWindowVisible })
         }
     }
     private func expandedPlayer(_ size: CGSize) -> some View {
@@ -187,7 +188,7 @@ struct LyricsScrollView: View {
             model.seek(doc.seekPosition(for: line)); browsing = false
         } label: {
             VStack(alignment: .leading, spacing: 9) {
-                LiveLyricText(session: model.session, line: line, document: doc, active: active, rendering: model.mainWindowVisible,
+                LiveLyricText(session: model.session, line: line, document: doc, active: active, rendering: { model.mainWindowVisible },
                               text: line.text.isEmpty ? "•••" : model.preferences.text(line.text), effects: model.preferences.lyricEmphasis)
                     .font(.system(size: model.preferences.mainLyricFontSize * min(1, max(0.8, width / 480)), weight: .bold)).tracking(-0.4).fixedSize(horizontal: false, vertical: true)
                     .foregroundStyle(active ? .white : .white.opacity(browsing ? 0.55 : distance <= 1 ? 0.25 : 0.15))
@@ -197,7 +198,7 @@ struct LyricsScrollView: View {
             }.frame(maxWidth: .infinity, alignment: .leading)
                 .scaleEffect(active ? 1 : 0.96, anchor: .leading)
                 .blur(radius: reduced || browsing || active ? 0 : min(2.05, Double(distance) * 0.7))
-                .animation(reduced || !model.mainWindowVisible ? nil : LyricMotion.following(lines: doc.lines, index: model.mainLyricIndex), value: distance)
+                .animation(reduced ? nil : LyricMotion.following(lines: doc.lines, index: model.mainLyricIndex), value: distance)
                 .contentShape(.rect)
         }.buttonStyle(.plain).accessibilityLabel(line.text.isEmpty ? "间奏" : line.text)
             .accessibilityHint("跳转到 " + timeString(doc.seekPosition(for: line)))

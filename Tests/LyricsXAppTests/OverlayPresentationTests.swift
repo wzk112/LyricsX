@@ -9,6 +9,25 @@ private struct PendingOverlayRepository: LyricsRepository {
     func save(_ document: LyricsDocument, for track: Track) async throws {}
 }
 
+private func whiteInkBounds(_ bitmap: NSBitmapImageRep) throws -> CGRect {
+    let image = try #require(bitmap.cgImage)
+    let context = try #require(CGContext(data: nil, width: bitmap.pixelsWide, height: bitmap.pixelsHigh,
+        bitsPerComponent: 8, bytesPerRow: bitmap.pixelsWide * 4, space: CGColorSpaceCreateDeviceRGB(),
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+    context.draw(image, in: .init(x: 0, y: 0, width: bitmap.pixelsWide, height: bitmap.pixelsHigh))
+    let bytes = try #require(context.data).assumingMemoryBound(to: UInt8.self)
+    var left = bitmap.pixelsWide, right = 0, top = bitmap.pixelsHigh, bottom = 0
+    for y in 0..<bitmap.pixelsHigh {
+        for x in 0..<bitmap.pixelsWide {
+            // Convert extended-range output once, not one NSColor per pixel.
+            if bytes[y * context.bytesPerRow + x * 4 + 1] > 127 {
+                left = min(left, x); right = max(right, x); top = min(top, y); bottom = max(bottom, y)
+            }
+        }
+    }
+    return .init(x: left, y: top, width: max(0, right - left), height: max(0, bottom - top))
+}
+
 @Suite @MainActor struct OverlayPresentationTests {
     private func fixture(_ run: (AppModel) throws -> Void) throws {
         let suite = "LyricsXTests-" + UUID().uuidString
@@ -85,10 +104,11 @@ private struct PendingOverlayRepository: LyricsRepository {
             for index in 1...8 {
                 model.session.seek(to: Double(index)); model.updateMainLyricSelection()
                 #expect(model.mainLyricIndex == 0 && model.session.currentLineIndex == index)
+                #expect(model.playbackControlPosition == 0)
                 #expect(!model.overlayUsesCompactPresentation)
             }
             model.mainWindowVisible = true
-            #expect(model.mainLyricIndex == 8)
+            #expect(model.mainLyricIndex == 8 && model.playbackControlPosition == 8)
         }
     }
 
@@ -99,22 +119,36 @@ private struct PendingOverlayRepository: LyricsRepository {
             model.artwork = NSImage(size: .init(width: 64, height: 64), flipped: false) { rect in
                 NSColor.white.setFill(); rect.fill(); return true
             }
-            for width in [320.0, 400.0, 620.0] {
+            for width in [320.0, 400.0, 620.0, 1000.0] {
                 model.preferences.overlayWidth = width
-                let cardWidth = min(400, width)
+                let cardWidth = width, height = OverlaySongCardLayout(width: width).height
                 let view = OverlayView(model: model, viewport: .init(width: cardWidth))
-                    .frame(width: cardWidth, height: 108).background(.black)
+                    .frame(width: cardWidth, height: height).background(.black)
                 let renderer = ImageRenderer(content: view); renderer.scale = 1
                 let bitmap = NSBitmapImageRep(cgImage: try #require(renderer.cgImage))
-                var left = bitmap.pixelsWide, right = 0, top = bitmap.pixelsHigh, bottom = 0
-                for y in 0..<bitmap.pixelsHigh {
-                    for x in 0..<bitmap.pixelsWide where (bitmap.colorAt(x: x, y: y)?.redComponent ?? 0) > 0.5 {
-                        left = min(left, x); right = max(right, x); top = min(top, y); bottom = max(bottom, y)
-                    }
-                }
-                print("Compact ink: \(left)...\(right), \(top)...\(bottom), card=\(cardWidth)")
-                #expect(abs(Double(left + right) / 2 - cardWidth / 2) <= 2)
-                #expect(abs(Double(top + bottom) / 2 - 54) <= 2)
+                let ink = try whiteInkBounds(bitmap)
+                #expect(abs(ink.midX - cardWidth / 2) <= 2)
+                #expect(abs(ink.midY - height / 2) <= 2)
+            }
+        }
+    }
+
+    @Test func longSongTitlesFitTheFullWidthInformationCard() throws {
+        try fixture { model in
+            model.preferences.reduceMotion = true
+            model.session.accept(.init(track: .init(playerID: "test", playerName: "Test",
+                title: "A Long Song Title With A Second Line And Featured Musicians", artist: "Several Artists & Orchestra"),
+                position: 0, isPlaying: false), shouldSearch: false)
+            model.session.use(.init(plainText: "Instrumental"), persist: false)
+            for width in [320.0, 620, 1000] {
+                model.preferences.overlayWidth = width
+                let card = OverlaySongCardLayout(width: width)
+                let renderer = ImageRenderer(content: OverlayView(model: model, viewport: .init(width: width))
+                    .frame(width: width, height: card.height).background(.black))
+                renderer.scale = 1
+                let ink = try whiteInkBounds(NSBitmapImageRep(cgImage: try #require(renderer.cgImage)))
+                #expect(ink.minX >= 24 && ink.maxX <= width - 24)
+                #expect(ink.minY >= 16 && ink.maxY <= card.height - 16)
             }
         }
     }
@@ -131,4 +165,23 @@ private struct PendingOverlayRepository: LyricsRepository {
     #expect(main.update(event: NSWindow.willCloseNotification, visible: true, miniaturized: false, exposed: true) == false)
     #expect(main.update(event: nil, visible: false, miniaturized: false, exposed: false) == false)
     #expect(main.update(event: NSWindow.didBecomeKeyNotification, visible: true, miniaturized: false, exposed: true) == true)
+}
+
+@MainActor @Test func disappearingLyricsLeaveForTheCardOnAShortDeadlineWithoutReplayingTheHeader() throws {
+    let suite = "LyricsXTests-" + UUID().uuidString
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let model = AppModel(repository: PendingOverlayRepository(), preferences: Preferences(defaults: defaults))
+    defer { model.stop() }
+    model.session.accept(.init(track: .init(playerID: "test", playerName: "Test", title: "Gap"), position: 1, isPlaying: false), shouldSearch: false)
+    model.session.use(.init(lines: [.init(id: 0, time: 0, text: "Before"), .init(id: 1, time: 2, text: ""), .init(id: 2, time: 5, text: "After")]), persist: false)
+    let presentation = OverlayPresentation(); defer { presentation.stop() }
+    presentation.update(model: model, at: 10)
+    model.session.seek(to: 2)
+    presentation.update(model: model, at: 11)
+    #expect(presentation.held?.index == 0 && presentation.preparingSince == 11)
+    presentation.finishIfDue(model: model, at: 11.161)
+    #expect(presentation.held == nil && model.overlayUsesCompactPresentation)
+    presentation.update(model: model, at: 11.2)
+    #expect(presentation.held == nil)
 }

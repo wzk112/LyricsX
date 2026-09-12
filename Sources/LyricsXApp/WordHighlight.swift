@@ -114,10 +114,12 @@ struct WordHighlight: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.multilineTextAlignment) private var alignment
     @Environment(\.layoutDirection) private var direction
+    @Environment(\.lyricHDRSupported) private var hdrSupported
 
     var body: some View {
         var options = effects
         options.reduced = options.reduced || reduceMotion
+        options.hdr = options.hdr && hdrSupported
         return LyricLayoutBoundary(text: text + (arrival?.layoutTail ?? "")) {
             TimedLyricLabel(line: line, text: text, arrival: arrival).equatable()
                 .textRenderer(HeldNoteRenderer(time: time, options: options, arrival: arrival,

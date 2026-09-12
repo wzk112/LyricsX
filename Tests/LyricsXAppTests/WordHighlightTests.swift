@@ -101,6 +101,8 @@ import LyricsXCore
         print("Rendered lyric luminance: SDR=\(sdrPeak), HDR=\(hdrPeak)")
         #expect(sdrPeak <= 1.01)
         #expect(hdrPeak > 1.1)
+        let unsupported = try render(time: 1.6, effects: .init(lift: false, glow: true, hdr: true), hdrSupported: false)
+        #expect(peak(unsupported) <= 1.01)
         let boosted = try render(time: 1.6, effects: .init(lift: false, glow: true, hdr: true, hdrBrightness: 3.2))
         #expect(peak(boosted) > hdrPeak * 1.4)
     }
@@ -233,7 +235,7 @@ import LyricsXCore
         }
     }
 
-    @Test func promotionStartsWithTheSameNextLinePixelsAndNoPreviousLine() throws {
+    @Test func promotionKeepsThePreviewPixelsWhileThePreviousLineBeginsItsDeparture() throws {
         let suite = "LyricsXTests-" + UUID().uuidString
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -243,7 +245,12 @@ import LyricsXCore
             .init(id: 1, time: 3, text: "SECOND WORD"), .init(id: 2, time: 6, text: "THIRD WORD")])
         func render(index: Int, time: Double) throws -> NSBitmapImageRep {
             let height = OverlayLayoutMetrics.height(preferences: prefs) - OverlayLayoutMetrics.chromeHeight
-            let view = OverlayLyricsContent(preferences: prefs, document: doc, index: index, lyricTime: { time })
+            let old = OverlayCueSnapshot(document: doc.id, index: 0, line: doc.lines[0], text: doc.lines[0].text,
+                plan: LyricLinePresentation.make(lines: doc.lines, index: 0), height: 80, fontSize: 28,
+                previewText: doc.lines[1].text, previewCenter: 80 + prefs.overlayPrimarySpacing + 20, previewScale: 0.5)
+            let history = index == 0 ? OverlayCueTransition() : OverlayCueTransition().updating(to: old, lyricTime: 2.99, at: 99.99, animated: true)
+            let view = OverlayLyricsContent(preferences: prefs, document: doc, index: index, lyricTime: { time },
+                animationTime: { 100 }, transition: history)
                 .frame(width: 500, height: height).background(.black)
             let renderer = ImageRenderer(content: view); renderer.scale = 1
             return NSBitmapImageRep(cgImage: try #require(renderer.cgImage))
@@ -258,7 +265,7 @@ import LyricsXCore
                 else { nextDifference += abs(a - b) }
             }
         }
-        #expect(oldInk > 100 && remainingOldInk < 1)
+        #expect(oldInk > 100 && abs(oldInk - remainingOldInk) < 1)
         #expect(nextDifference < 1)
     }
 
@@ -310,8 +317,12 @@ import LyricsXCore
         let doc = LyricsDocument(lines: [.init(id: 0, time: 0, text: "FIRST WORD"),
             .init(id: 1, time: 3, text: "SECOND\nWORD"), .init(id: 2, time: 6, text: "THIRD WORD")])
         func render(index: Int, time: Double) throws -> NSBitmapImageRep {
+            let old = OverlayCueSnapshot(document: doc.id, index: 0, line: doc.lines[0], text: doc.lines[0].text,
+                plan: LyricLinePresentation.make(lines: doc.lines, index: 0), height: 40, fontSize: 28,
+                previewText: doc.lines[1].text, previewCenter: 40 + prefs.overlayPrimarySpacing + 20, previewScale: 0.5)
+            let history = index == 0 ? OverlayCueTransition() : OverlayCueTransition().updating(to: old, lyricTime: 2.99, at: 99.99, animated: true)
             let view = OverlayLyricsContent(preferences: prefs, document: doc, index: index,
-                lyricTime: { time }, adaptiveCanvasWidth: 500)
+                lyricTime: { time }, adaptiveCanvasWidth: 500, animationTime: { 100 }, transition: history)
                 .frame(width: 500).frame(height: 240, alignment: .top).background(.black)
             let renderer = ImageRenderer(content: view); renderer.scale = 1
             return NSBitmapImageRep(cgImage: try #require(renderer.cgImage))
@@ -326,15 +337,16 @@ import LyricsXCore
                 else { nextDifference += abs(a - b) }
             }
         }
-        #expect(oldInk > 100 && oldRemaining < 1)
+        #expect(oldInk > 100 && abs(oldInk - oldRemaining) < 1)
         #expect(nextDifference < 1)
     }
 
-    private func render(time: Double, effects: LyricEmphasisOptions) throws -> CGImage {
+    private func render(time: Double, effects: LyricEmphasisOptions, hdrSupported: Bool = true) throws -> CGImage {
         let line = LyricLine(id: 0, time: 0, text: "Stay 光", words: [
             .init(text: "Stay", start: 0.1, end: 3.2), .init(text: "光", start: 3.2, end: 4)
         ])
         let view = WordHighlight(line: line, time: time, active: true, text: line.text, effects: effects)
+            .environment(\.lyricHDRSupported, hdrSupported)
             .font(.system(size: 38, weight: .semibold)).foregroundStyle(.white)
             .padding(24).frame(width: 350, height: 130).background(.black)
         let renderer = ImageRenderer(content: view)

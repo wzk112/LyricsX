@@ -10,6 +10,7 @@ final class AppModel {
     var preferences: Preferences
     let session: LyricsSession
     let store: LyricsStore
+    let displays = HDRDisplayMonitor()
     let bridge = PlayerBridge()
     let dockVisibility: DockVisibilityController
     var playerError: String?
@@ -25,7 +26,7 @@ final class AppModel {
     @ObservationIgnored private var libraryGeneration = 0
     var showMainWindow: (() -> Void)?
     @ObservationIgnored var overlay: OverlayController?
-    @ObservationIgnored private var ticker: Task<Void, Never>?
+    @ObservationIgnored private var ticker: PlaybackTicker?
     @ObservationIgnored private var artworkTask: Task<Void, Never>?
     @ObservationIgnored private var artworkIdentity: String?
     @ObservationIgnored private var artworkBytes: Data?
@@ -42,7 +43,6 @@ final class AppModel {
             guard let self else { return }
             self.session.accept(snapshot, shouldSearch: !self.lyricsBlocked(for: snapshot.track))
             self.updateMainLyricSelection()
-            self.playbackControlPosition = self.session.position
             self.updateArtwork(self.session.track)
         }
         bridge.onError = { [weak self] error in
@@ -63,13 +63,17 @@ final class AppModel {
         return text.isEmpty || text.unicodeScalars.allSatisfy(Self.gapCharacters.contains)
     }
     func updateMainLyricSelection() {
-        guard mainWindowVisible, mainLyricIndex != session.currentLineIndex else { return }
-        mainLyricIndex = session.currentLineIndex
+        guard mainWindowVisible else { return }
+        if mainLyricIndex != session.currentLineIndex { mainLyricIndex = session.currentLineIndex }
+        if abs(session.position - playbackControlPosition) >= 0.2 || !session.isPlaying {
+            playbackControlPosition = session.position
+        }
     }
 
     func start() {
         guard ticker == nil else { return }
         presentationStopped = false
+        displays.start()
         dockVisibility.start()
         observeDockVisibility()
         overlay = OverlayController(model: self)
@@ -81,26 +85,19 @@ final class AppModel {
         wakeObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.bridge.stop(); self?.session.freeze() }
         })
-        ticker = Task { [weak self] in
-            while !Task.isCancelled {
-                guard let self else { return }
-                self.session.tick()
-                self.updateMainLyricSelection()
-                // Native sliders need far fewer updates than syllable drawing.
-                // Keep the lyric clock precise without relaying every frame
-                // through AppKit's progress-control layout and accessibility.
-                if abs(self.session.position - self.playbackControlPosition) >= 0.2 || !self.session.isPlaying {
-                    self.playbackControlPosition = self.session.position
-                }
-                let visible = self.mainWindowVisible || self.overlay?.needsPreciseLyricTicks == true
-                let interval = LyricTickCadence.milliseconds(playing: self.session.isPlaying, visible: visible,
-                    document: self.session.document, position: self.session.position)
-                do { try await Task.sleep(for: .milliseconds(interval)) } catch { return }
-            }
+        ticker = PlaybackTicker { [weak self] in
+            guard let self else { return nil }
+            self.session.tick()
+            self.updateMainLyricSelection()
+            let visible = self.mainWindowVisible || self.overlay?.needsPreciseLyricTicks == true
+            return LyricTickCadence.milliseconds(playing: self.session.isPlaying, visible: visible,
+                document: self.session.document, position: self.session.position)
         }
+        ticker?.start()
     }
     func stop() {
-        ticker?.cancel(); ticker = nil; artworkTask?.cancel(); presentationStopped = true
+        ticker?.stop(); ticker = nil; artworkTask?.cancel(); presentationStopped = true
+        displays.stop()
         dockVisibility.stop()
         overlay?.stop(); bridge.stop(); session.stop()
         for token in wakeObservers { NSWorkspace.shared.notificationCenter.removeObserver(token) }

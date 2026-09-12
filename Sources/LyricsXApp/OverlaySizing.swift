@@ -2,35 +2,6 @@ import AppKit
 import Observation
 import LyricsXCore
 
-/// Window hysteresis is independent of playback frames and lyric rendering.
-struct OverlaySizingPolicy {
-    private(set) var size = NSSize.zero
-    private var shorterSince: Double?
-
-    mutating func resolve(_ desired: NSSize, at now: Double, immediate: Bool = false) -> NSSize {
-        // Width is a user setting, never inferred from the current lyric.
-        if immediate || size == .zero {
-            size = desired; shorterSince = nil
-            return size
-        }
-        size.width = desired.width
-        if desired.height >= size.height {
-            size.height = desired.height; shorterSince = nil
-            return size
-        }
-        guard desired.height <= size.height - 12 else { shorterSince = nil; return size }
-        if shorterSince == nil { shorterSince = now }
-        // Let the incoming row settle, then use its current measured height.
-        // Keeping the largest old request made shrinking happen in slow steps.
-        // Full incremental chains already share one measurement, while brief
-        // short interjections are filtered by this small stability interval.
-        if now - (shorterSince ?? now) >= 0.65 {
-            size.height = desired.height; shorterSince = nil
-        }
-        return size
-    }
-}
-
 @Observable @MainActor
 final class OverlayViewport {
     var width: Double
@@ -40,20 +11,8 @@ final class OverlayViewport {
 /// Measure full lines once, never individual reveal frames. The rendering canvas
 /// keeps its fixed width while only the native glass/window height animates.
 @MainActor enum OverlayTextMeasure {
-    private struct Key: Hashable { let text: String; let font: Double; let tracking: Double; let weight: Double }
-    private static var cache: [Key: Double] = [:]
     private struct LineKey: Hashable { let document: UUID; let index: Int; let conversion: String; let text: String }
     private static var lineCache: [LineKey: String] = [:]
-    static func width(_ text: String, font: Double, tracking: Double = -0.4, weight: NSFont.Weight = .semibold) -> Double {
-        let key = Key(text: text, font: font, tracking: tracking, weight: weight.rawValue)
-        if let value = cache[key] { return value }
-        let value = ceil((text as NSString).size(withAttributes: [
-            .font: NSFont.systemFont(ofSize: font, weight: weight), .kern: tracking
-        ]).width)
-        if cache.count >= 256 { cache.removeAll(keepingCapacity: true) }
-        cache[key] = value
-        return value
-    }
     static func layoutText(document: LyricsDocument, index: Int, preferences: Preferences) -> String {
         guard document.lines.indices.contains(index) else { return "" }
         let key = LineKey(document: document.id, index: index, conversion: preferences.conversion, text: document.lines[index].text)
@@ -64,15 +23,69 @@ final class OverlayViewport {
         lineCache[key] = value
         return value
     }
+    struct TextLayout {
+        let fontSize: Double
+        let height: Double
+        let rows: Int
+    }
+    private struct LayoutKey: Hashable {
+        let text: String
+        let font: Double
+        let width: Double
+        let tracking: Double
+        let weight: Double
+        let minimumScale: Double
+    }
+    private static var layoutCache: [LayoutKey: TextLayout] = [:]
+
+    /// Choose wrapping and (only when needed) a two-row font reduction once.
+    /// SwiftUI then draws at this explicit size, instead of independently
+    /// shrinking a measured two-row string back into one bottom-aligned row.
+    static func layout(_ text: String, font: Double, canvasWidth: Double, tracking: Double = -0.4,
+                       weight: NSFont.Weight = .semibold, minimumScale: Double = 0.6) -> TextLayout {
+        let available = max(1, canvasWidth - 8)
+        let key = LayoutKey(text: text, font: font, width: available, tracking: tracking, weight: weight.rawValue, minimumScale: minimumScale)
+        if let value = layoutCache[key] { return value }
+        func rows(at size: Double) -> Int {
+            let storage = NSTextStorage(string: text.isEmpty ? " " : text, attributes: [
+                .font: NSFont.systemFont(ofSize: size, weight: weight), .kern: tracking
+            ])
+            let manager = NSLayoutManager()
+            let container = NSTextContainer(size: .init(width: available, height: .greatestFiniteMagnitude))
+            container.lineFragmentPadding = 0
+            storage.addLayoutManager(manager); manager.addTextContainer(container)
+            manager.ensureLayout(for: container)
+            var count = 0
+            manager.enumerateLineFragments(forGlyphRange: manager.glyphRange(for: container)) { _, _, _, _, stop in
+                count += 1
+                if count > 2 { stop.pointee = true }
+            }
+            return max(1, count)
+        }
+        var size = font
+        var count = rows(at: size)
+        if count > 2 {
+            var low = font * minimumScale, high = font
+            for _ in 0..<6 {
+                let mid = (low + high) / 2
+                if rows(at: mid) > 2 { high = mid } else { low = mid }
+            }
+            size = low; count = rows(at: size)
+        }
+        let value = TextLayout(fontSize: size, height: ceil(size * 1.4) * Double(min(2, count)), rows: min(2, count))
+        if layoutCache.count >= 256 { layoutCache.removeAll(keepingCapacity: true) }
+        layoutCache[key] = value
+        return value
+    }
+    static func primaryLayout(document: LyricsDocument, index: Int, preferences: Preferences, canvasWidth: Double) -> TextLayout {
+        layout(layoutText(document: document, index: index, preferences: preferences), font: preferences.fontSize, canvasWidth: canvasWidth)
+    }
     static func primaryHeight(document: LyricsDocument, index: Int, preferences: Preferences, canvasWidth: Double) -> Double {
-        let text = layoutText(document: document, index: index, preferences: preferences)
-        let rows = text.contains("\n") || width(text, font: preferences.fontSize) > canvasWidth - 8 ? 2.0 : 1.0
-        return ceil(preferences.fontSize * 1.4) * rows
+        primaryLayout(document: document, index: index, preferences: preferences, canvasWidth: canvasWidth).height
     }
     static func translationHeight(_ text: String?, font: Double, canvasWidth: Double) -> Double {
         guard let text else { return 0 }
-        let rows = text.contains("\n") || width(text, font: font, tracking: 0, weight: .medium) > canvasWidth - 8 ? 2.0 : 1.0
-        return ceil(font * 1.4) * rows
+        return layout(text, font: font, canvasWidth: canvasWidth, tracking: 0, weight: .medium, minimumScale: 0.75).height
     }
     static func desiredSize(document: LyricsDocument, index: Int, preferences p: Preferences, maximumWidth: Double) -> NSSize {
         .init(width: maximumWidth, height: height(document: document, index: index, preferences: p, maximumWidth: maximumWidth))

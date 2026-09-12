@@ -49,7 +49,6 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private var resizing = false
     private var restoring = true
     private var anchorTop: NSPoint?
-    private var sizingPolicy = OverlaySizingPolicy()
     private var lastSizingConfiguration: [Double] = []
     private var resizeGeneration = 0
     private var sizingDocument: UUID?
@@ -223,7 +222,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         let needsHoverTracking = visible
         if needsHoverTracking && hoverTimer == nil {
             let timer = Timer(timeInterval: 0.08, repeats: true) { [weak self] _ in
-                MainActor.assumeIsolated { self?.refreshAppearance(); self?.updateSizing() }
+                MainActor.assumeIsolated { self?.refreshAppearance() }
             }
             timer.tolerance = 0.02
             RunLoop.main.add(timer, forMode: .common)
@@ -304,25 +303,25 @@ final class OverlayController: NSObject, NSWindowDelegate {
         guard !stopped, !dragging else { return }
         let p = model.preferences
         let maximum = p.overlayLayoutWidth
-        let compact = presentation.held?.compact ?? model.overlayUsesCompactPresentation
+        let compact = model.overlayUsesCompactPresentation
         // No observation of the 60 Hz clock: only a line/setting change can
-        // request a new size. The existing hover timer expires shrink holds.
-        let document = presentation.held?.document ?? model.session.document
-        let index = presentation.held?.index ?? model.session.currentLineIndex
+        // request a new size. Retarget native animation immediately in either direction.
+        let document = model.session.document
+        let index = model.session.currentLineIndex
         let configuration = [maximum, p.fontSize, p.translationFontSize,
             p.nextLineFontSize, Double(OverlaySecondaryMode.allCases.firstIndex(of: p.overlaySecondaryMode) ?? 0),
             p.overlayAdaptiveSize ? 1 : 0, compact ? 1 : 0, p.showTranslation ? 1 : 0]
         let changed = configuration != lastSizingConfiguration
         if changed || document?.id != sizingDocument || index != sizingIndex || p.conversion != sizingConversion {
-            if compact { desiredSize = NSSize(width: min(maximum, 400), height: 108) }
+            if compact { desiredSize = NSSize(width: maximum, height: OverlaySongCardLayout(width: maximum).height) }
             else if p.overlayAdaptiveSize, let document, let index {
                 desiredSize = OverlayTextMeasure.desiredSize(document: document, index: index, preferences: p, maximumWidth: maximum)
             } else { desiredSize = NSSize(width: maximum, height: OverlayLayoutMetrics.height(preferences: p)) }
             sizingDocument = document?.id; sizingIndex = index; sizingConversion = p.conversion
         }
         lastSizingConfiguration = configuration
-        let size = sizingPolicy.resolve(desiredSize, at: ProcessInfo.processInfo.systemUptime, immediate: changed || !lastVisible)
-        let canvas = NSSize(width: maximum, height: max(108, OverlayLayoutMetrics.height(preferences: p)))
+        let size = desiredSize
+        let canvas = NSSize(width: maximum, height: max(OverlaySongCardLayout(width: maximum).height, OverlayLayoutMetrics.height(preferences: p)))
         if content.frame.size != canvas { content.setFrameSize(canvas) }
         positionContent()
         guard size != lastSize else { return }
@@ -382,8 +381,9 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private func positionContent() {
         // Move the persistent maximum-size canvas; never resize its bounds for
         // animated window frames. SwiftUI typography and HDR surfaces survive.
-        content.setFrameOrigin(NSPoint(x: (root.bounds.width - content.frame.width) / 2,
-                                       y: root.bounds.height - content.frame.height))
+        let origin = NSPoint(x: (root.bounds.width - content.frame.width) / 2,
+                             y: root.bounds.height - content.frame.height)
+        if content.frame.origin != origin { content.setFrameOrigin(origin) }
     }
 
     func windowDidResize(_ notification: Notification) {
@@ -421,28 +421,29 @@ struct OverlayView: View {
         let maximum = model.preferences.overlayLayoutWidth
         let display = presentation?.held ?? OverlayDisplaySnapshot(model: model, at: ProcessInfo.processInfo.systemUptime)
         let compact = display.compact
+        let card = OverlaySongCardLayout(width: maximum)
         let height = presentationHeight(maximum: maximum, display: display)
         let transition = contentTransition(display: display)
         VStack(spacing: 0) {
             if compact {
-                HStack(spacing: 12) {
+                HStack(spacing: card.spacing) {
                     Group {
                         if let artwork = display.artwork {
                             Image(nsImage: artwork).resizable().scaledToFill()
                         } else {
                             ZStack { Color.white.opacity(0.08); Image(systemName: "music.note").font(.system(size: 18)) }
                         }
-                    }.frame(width: 42, height: 42).clipShape(.rect(cornerRadius: 9))
+                    }.frame(width: card.artwork, height: card.artwork).clipShape(.rect(cornerRadius: 9))
                     VStack(alignment: .leading, spacing: 4) {
                         Text(display.track?.title ?? "LyricsX")
-                            .font(.system(size: 17, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.8)
+                            .font(.system(size: card.title, weight: .semibold)).lineLimit(2).minimumScaleFactor(0.85)
                         if display.searching {
-                            Text("正在加载歌词…").font(.system(size: 12, weight: .medium)).opacity(0.8)
+                            Text("正在加载歌词…").font(.system(size: card.artist, weight: .medium)).opacity(0.8)
                         } else if let artist = display.track?.artist, !artist.isEmpty {
-                            Text(artist).font(.system(size: 12, weight: .medium)).lineLimit(1).opacity(0.8)
+                            Text(artist).font(.system(size: card.artist, weight: .medium)).lineLimit(1).opacity(0.8)
                         }
                     }.shadow(color: .black.opacity(0.8), radius: 2, y: 1)
-                }.frame(maxWidth: max(260, viewport.width - 60), alignment: .center)
+                }.frame(maxWidth: card.contentWidth, alignment: .center)
             } else {
                 HStack(spacing: 6) {
                     Text(display.track?.title ?? "LyricsX").lineLimit(1)
@@ -468,10 +469,10 @@ struct OverlayView: View {
         }.padding(.horizontal, 24).padding(.vertical, 12)
             .foregroundStyle(.white)
             .padding(6)
-            .frame(width: maximum, height: compact ? 108 : height)
+            .frame(width: maximum, height: compact ? card.height : height)
             .modifier(transition)
             .compositingGroup()
-            .allowedDynamicRange(model.preferences.lyricEmphasis.usesHDR ? .high : .standard)
+            .hdrDisplayScope(requested: model.preferences.lyricEmphasis.usesHDR)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .background(WindowVisibilityReader { windowVisible = $0 }.frame(width: 0, height: 0))
     }

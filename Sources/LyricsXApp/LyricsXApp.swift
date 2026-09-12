@@ -7,7 +7,7 @@ struct LyricsXApp: App {
     @State private var model = AppModel()
     var body: some Scene {
         Window("LyricsX", id: "main") {
-            MainView(model: model).onAppear { delegate.configure(model) }
+            MainView(model: model).hdrDisplayScope(requested: model.preferences.lyricEmphasis.usesHDR).onAppear { delegate.configure(model) }
         }
         .defaultSize(width: 1040, height: 720)
         .windowStyle(.hiddenTitleBar)

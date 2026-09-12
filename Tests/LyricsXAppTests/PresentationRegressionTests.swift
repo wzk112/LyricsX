@@ -149,7 +149,7 @@ private let overlayLyrics = LyricsDocument(title: "Overlay Song", artist: "Artis
             UserDefaults.standard.removeObject(forKey: "LyricsX.OverlayPosition.\(name)")
         }
         let screen = try #require(NSScreen.main)
-        let target = NSPoint(x: screen.visibleFrame.maxX - 404, y: screen.visibleFrame.minY + 100)
+        let target = NSPoint(x: screen.visibleFrame.maxX - 604, y: screen.visibleFrame.minY + 100)
         overlay.panel.setFrameOrigin(target)
         let top = NSPoint(x: overlay.panel.frame.midX, y: overlay.panel.frame.maxY)
         overlay.windowDidMove(.init(name: NSWindow.didMoveNotification, object: overlay.panel))
@@ -160,7 +160,7 @@ private let overlayLyrics = LyricsDocument(title: "Overlay Song", artist: "Artis
             #expect(overlay.panel.frame.maxX <= screen.visibleFrame.maxX)
             model.session.use(.init(plainText: "纯音乐，请欣赏"), persist: false)
             try await Task.sleep(for: .milliseconds(25))
-            #expect(model.overlayUsesCompactPresentation && overlay.panel.frame.size == NSSize(width: 400, height: 108))
+            #expect(model.overlayUsesCompactPresentation && overlay.panel.frame.size == NSSize(width: 600, height: OverlaySongCardLayout(width: 600).height))
             #expect(overlay.panel.frame.origin == target)
             #expect(UserDefaults.standard.string(forKey: "LyricsX.OverlayPosition.\(name)") == NSStringFromPoint(target))
             #expect(UserDefaults.standard.string(forKey: "LyricsX.OverlayTop.\(name)") == NSStringFromPoint(top))

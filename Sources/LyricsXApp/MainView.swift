@@ -43,7 +43,7 @@ struct MainView: View {
     }
     private var footer: some View {
         HStack(spacing: 7) {
-            PlayingIndicator(playing: model.mainWindowVisible && model.session.isPlaying).foregroundStyle(Color(red: 0.97, green: 0.50, blue: 0.57))
+            MainPlayingIndicator(model: model).foregroundStyle(Color(red: 0.97, green: 0.50, blue: 0.57))
             Text(model.session.track?.playerName ?? "等待播放").font(.system(size: 10, weight: .medium))
             if model.session.track != nil {
                 Text("·").foregroundStyle(.white.opacity(0.2))
@@ -73,4 +73,9 @@ struct MainView: View {
             .padding(.horizontal, 20).padding(.vertical, 8)
             .background(.black.opacity(0.1))
     }
+}
+
+private struct MainPlayingIndicator: View {
+    let model: AppModel
+    var body: some View { PlayingIndicator(playing: model.mainWindowVisible && model.session.isPlaying) }
 }

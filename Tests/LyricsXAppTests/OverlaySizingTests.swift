@@ -3,37 +3,6 @@ import Testing
 import LyricsXCore
 @testable import LyricsXApp
 
-@Test func fixedWidthOnlyGrowsOrShrinksHeightAfterStableLines() {
-    var policy = OverlaySizingPolicy()
-    let tall = NSSize(width: 620, height: 210), short = NSSize(width: 620, height: 170)
-    #expect(policy.resolve(tall, at: 0) == tall)
-    #expect(policy.resolve(short, at: 0.1) == tall)
-    #expect(policy.resolve(short, at: 0.7) == tall)
-    #expect(policy.resolve(short, at: 0.8) == short)
-    #expect(policy.resolve(tall, at: 0.9) == tall)
-    #expect(policy.resolve(.init(width: 620, height: 204), at: 20) == tall)
-}
-
-@Test func shortVerseDoesNotPumpTheHeight() {
-    var policy = OverlaySizingPolicy()
-    let tall = NSSize(width: 620, height: 220), short = NSSize(width: 620, height: 180)
-    _ = policy.resolve(tall, at: 0)
-    // Rapid interjections should not collapse and reopen the window.
-    for step in 1...120 {
-        #expect(policy.resolve(step % 5 == 0 ? tall : short, at: Double(step) * 0.1) == tall)
-    }
-    #expect(policy.resolve(short, at: 12.1) == tall)
-    #expect(policy.resolve(short, at: 12.8) == short)
-}
-
-@Test func shrinkUsesTheCurrentHeightWithoutWaitingInSteps() {
-    var policy = OverlaySizingPolicy()
-    _ = policy.resolve(.init(width: 620, height: 220), at: 0)
-    _ = policy.resolve(.init(width: 620, height: 180), at: 0.1)
-    _ = policy.resolve(.init(width: 620, height: 145), at: 0.4)
-    #expect(policy.resolve(.init(width: 620, height: 145), at: 0.8).height == 145)
-}
-
 @Test func resizingKeepsTopAndHorizontalCenterAcrossSizesAndScreenClamps() {
     let screen = NSRect(x: -1440, y: -200, width: 1440, height: 1000)
     let anchor = OverlayAnchor(topCenter: .init(x: -700, y: 680))
@@ -120,8 +89,8 @@ private struct SizingRepository: LyricsRepository {
     #expect(abs(overlay.panel.frame.height - targetHeight) <= 1)
     model.session.seek(to: 6)
     try await Task.sleep(for: .milliseconds(250))
-    #expect(abs(overlay.panel.frame.height - targetHeight) <= 1)
-    // Poll for the actual shrink deadline, tolerating a busy rendering executor.
+    #expect(overlay.panel.frame.height < targetHeight - 1)
+    // Shrink starts immediately; wait only for the native animation to finish.
     for _ in 0..<115 where overlay.panel.frame.height > originalHeight + 1 {
         try await Task.sleep(for: .milliseconds(50))
     }

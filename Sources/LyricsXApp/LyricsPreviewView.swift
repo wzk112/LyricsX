@@ -33,6 +33,7 @@ struct LyricsPreviewView: View {
             }
         }.padding(40).frame(minWidth: 680, minHeight: 380)
             .background(Color(white: 0.08)).preferredColorScheme(.dark)
+            .hdrDisplayScope(requested: preferences.lyricEmphasis.usesHDR)
             .background(WindowVisibilityReader { visible = $0 })
     }
 }
@@ -64,6 +65,9 @@ private enum LyricPreviewSamples {
 }
 
 struct WindowRenderActivity {
+    static let notifications: [Notification.Name] = [NSWindow.didChangeOcclusionStateNotification,
+        NSWindow.willMiniaturizeNotification, NSWindow.didMiniaturizeNotification,
+        NSWindow.didDeminiaturizeNotification, NSWindow.willCloseNotification, NSWindow.didBecomeKeyNotification]
     private var leaving = false
     mutating func update(event: Notification.Name?, visible: Bool, miniaturized: Bool, exposed: Bool) -> Bool {
         if event == NSWindow.willMiniaturizeNotification || event == NSWindow.willCloseNotification { leaving = true }
@@ -85,7 +89,7 @@ struct WindowVisibilityReader: NSViewRepresentable {
             super.viewDidMoveToWindow()
             NotificationCenter.default.removeObserver(self)
             if let window {
-                for name in [NSWindow.didChangeOcclusionStateNotification, NSWindow.willMiniaturizeNotification, NSWindow.didMiniaturizeNotification, NSWindow.didDeminiaturizeNotification, NSWindow.willCloseNotification, NSWindow.didBecomeKeyNotification] {
+                for name in WindowRenderActivity.notifications {
                     NotificationCenter.default.addObserver(self, selector: #selector(updateVisibility(_:)), name: name, object: window)
                 }
             }

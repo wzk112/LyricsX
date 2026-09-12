@@ -42,8 +42,10 @@ struct OverlayDisplaySnapshot {
 
     func update(model: AppModel, at now: Double = ProcessInfo.processInfo.systemUptime) {
         let live = OverlayDisplaySnapshot(model: model, at: now)
-        guard live.track != nil, live.document == nil, live.searching,
-              let last, last.document != nil else {
+        let searchingForSong = live.track != nil && live.document == nil && live.searching
+        let enteringCard = live.compact && last?.compact == false
+        guard !model.preferences.reduceMotion, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+              searchingForSong || enteringCard, let last, last.document != nil else {
             stop(); self.last = live
             return
         }

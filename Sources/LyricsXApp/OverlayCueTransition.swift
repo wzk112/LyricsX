@@ -1,0 +1,82 @@
+import Foundation
+import LyricsXCore
+
+/// Remember what was actually on screen, rather than inventing an outgoing
+/// row from index - 1 after a seek, document replacement or window reopening.
+struct OverlayCueSnapshot: Equatable {
+    let document: UUID
+    let index: Int
+    let line: LyricLine
+    let text: String
+    let plan: LyricLinePresentation?
+    let height: Double
+    let fontSize: Double
+    let previewText: String?
+    let previewCenter: Double?
+    let previewScale: Double
+}
+
+struct OverlayCueDeparture {
+    let cue: OverlayCueSnapshot
+    let time: Double
+    let startedAt: Double
+    let duration: Double
+    let pose: OverlayMotionFrame
+
+    func frame(at now: Double) -> LyricMotion.Frame? {
+        let progress = max(0, (now - startedAt) / duration)
+        guard progress < 1 else { return nil }
+        let eased = LyricEmphasisFrame.smooth(progress)
+        let distance = min(16, max(8, cue.height * 0.3))
+        return .init(offset: -distance * eased, blur: 3.2 * eased, opacity: 1 - eased)
+    }
+}
+
+struct OverlayCueTransition {
+    private(set) var current: OverlayCueSnapshot?
+    private(set) var promotionDistance: Double?
+    private(set) var departure: OverlayCueDeparture?
+    private var arrivedAt: Double?
+
+    func layoutTime(at now: Double, fallback: Double) -> Double {
+        guard let current, let arrivedAt else { return fallback }
+        return current.line.time + max(0, now - arrivedAt)
+    }
+
+    func needsFrames(at now: Double, reduced: Bool) -> Bool {
+        guard !reduced else { return false }
+        if departure?.frame(at: now) != nil { return true }
+        guard let plan = current?.plan, plan.stablePrefixCount == 0 else { return false }
+        return layoutTime(at: now, fallback: .infinity) < plan.start + min(OverlayMotionFrame.durationLimit, plan.duration)
+    }
+
+    func updating(to cue: OverlayCueSnapshot, lyricTime: Double, at now: Double, animated: Bool) -> Self {
+        var result = self
+        result.current = cue
+        if let current, current.document == cue.document, current.index == cue.index, current.text == cue.text {
+            if !animated { result.promotionDistance = nil; result.departure = nil }
+            return result
+        }
+        result.arrivedAt = now - max(0, lyricTime - cue.line.time)
+        result.promotionDistance = nil
+        result.departure = nil
+        guard animated else { return result }
+        guard let current, current.document == cue.document, current.index + 1 == cue.index,
+              lyricTime >= cue.line.time, lyricTime - cue.line.time < 0.2,
+              cue.plan?.stablePrefixCount == 0 else { return result }
+        if current.previewText == cue.text, let center = current.previewCenter {
+            result.promotionDistance = center - cue.height / 2
+        }
+        // A new cue replaces the sole departing row. Its deadline uses uptime,
+        // so pausing cannot leave a translucent old lyric behind the new one.
+        result.departure = .init(cue: current, time: lyricTime, startedAt: now,
+            duration: min(0.16, (cue.plan?.duration ?? 0.4) * 0.45),
+            pose: OverlayMotionFrame.make(time: lyricTime, plan: current.plan,
+                distance: promotionDistance, nextScale: current.previewScale, reduced: false))
+        return result
+    }
+
+    mutating func finishDeparture(startedAt: Double) {
+        if departure?.startedAt == startedAt { departure = nil }
+    }
+}
