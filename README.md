@@ -55,11 +55,15 @@
 
 “设置 → 悬浮窗 → 外观”提供 Liquid Glass 和“磨砂阅读”两种样式，使用等宽、对齐的可点击图例。两者都使用 Apple 官方的 `NSGlassEffectView`：Liquid Glass 使用 `.clear`，边缘保留原生光学效果，再平滑过渡到中央阅读区；磨砂阅读使用 `.regular` 更充分地柔化背景，并采用较浅的阅读底色。两种样式均保留深色到通透的渐变，不另画整圈高光描边，也不叠加第二块玻璃。
 
+首次启动默认使用 Liquid Glass，透明度 26%、磨砂程度 80%，开启悬浮窗显示和“鼠标经过时隐藏”。鼠标经过隐藏在锁定后生效，解锁后可拖动窗口。升级时保留已经保存的设置。
+
 “透明度”范围为 20–80%，数值越高越通透。“磨砂程度”范围为 0–100%，通过原生材质与后方内容的混合程度柔化背景细节，0% 仍保留材质本身的效果。两种样式分别保存磨砂值，图例与实际悬浮窗同步更新；歌词文字和控制条不会随背景一起模糊或淡化。设置会在重启后恢复，旧版偏好自动迁移。开启系统“降低透明度”时使用实色背景。
 
 原生折射与模糊由 macOS 绘制，公开 API 没有独立的折射强度或模糊半径参数。此处的磨砂调节是材质混合控制；边缘使用缓存的柔和遮罩保留系统光学效果，不采集屏幕重绘。纯色背景上的玻璃感会较弱。实现参考 Apple 的 [Liquid Glass 设计说明](https://developer.apple.com/videos/play/wwdc2025/219/) 和 [NSGlassEffectView 文档](https://developer.apple.com/documentation/appkit/nsglasseffectview)。
 
 歌词动效按各自窗口所在屏幕请求最高刷新率，跨屏或改变显示配置后自动更新；实际帧率仍由系统电源、温度和显示设置决定。暂停、遮挡或隐藏时停止不需要的逐帧绘制。遮罩采用有上限的共享缓存，窗口缩放只更新尺寸，歌词切换不重新创建玻璃材质。内部黑色渐变从顶部向下逐渐变通透，外围保留更宽的原生光学过渡区域。
+
+主窗口的歌词滚动位置按歌曲和歌词版本独立管理。切歌或重新载入歌词后，前奏尚未进入第一句时停在列表顶部；进入歌词后平滑跟随当前句，清除上一首的手动浏览状态与延迟返回任务。
 
 ## 设置
 
@@ -67,7 +71,7 @@
 
 ## 安装
 
-从 [Releases](https://github.com/wzk112/LyricsX/releases) 下载最新的 `LyricsX-2.0.18.zip`，解压后将 `LyricsX.app` 拖到 `/Applications`。
+从 [Releases](https://github.com/wzk112/LyricsX/releases) 下载最新的 `LyricsX-2.0.19.zip`，解压后将 `LyricsX.app` 拖到 `/Applications`。
 
 本次包使用本机 ad-hoc 签名，没有 Developer ID 公证票据。首次打开时如果 macOS 提示无法验证开发者：
 
@@ -79,7 +83,7 @@
    xattr -dr com.apple.quarantine /Applications/LyricsX.app
    ```
 
-完整的安装、签名和版本说明见 [`docs/releases/v2.0.18.md`](docs/releases/v2.0.18.md)。
+完整的安装、签名和版本说明见 [`docs/releases/v2.0.19.md`](docs/releases/v2.0.19.md)。
 
 ## 播放器权限
 

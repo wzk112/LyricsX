@@ -4,9 +4,9 @@ enum OverlayAppearance: String, CaseIterable, Identifiable {
     case glass, frosted
 
     static let transparencyRange = 0.2...0.8
-    static let defaultTransparency = 0.6
+    static let defaultTransparency = 0.26
     static let frostRange = 0.0...1.0
-    var defaultFrost: Double { self == .glass ? 0.35 : 0.82 }
+    var defaultFrost: Double { self == .glass ? 0.80 : 0.82 }
     private var frostCapacity: Double { self == .glass ? 0.7 : 0.9 }
     var id: String { rawValue }
     var title: String {

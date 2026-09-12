@@ -65,7 +65,7 @@ final class Preferences {
         overlayVisible = d.object(forKey: "overlayVisible") as? Bool ?? true
         overlayLocked = d.bool(forKey: "overlayLocked")
         overlayClickThrough = d.bool(forKey: "overlayClickThrough")
-        hideOverlayOnHover = d.bool(forKey: "hideOverlayOnHover")
+        hideOverlayOnHover = d.object(forKey: "hideOverlayOnHover") as? Bool ?? true
         overlayAppearance = OverlayAppearance(savedValue: d.string(forKey: "overlayAppearance"))
         let savedTransparency = d.object(forKey: "overlayTransparency") as? Double
         let legacyStrength = d.object(forKey: "overlayBackgroundStrength") as? Double

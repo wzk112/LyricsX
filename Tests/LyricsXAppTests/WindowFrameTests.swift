@@ -1,5 +1,7 @@
 import AppKit
 import Testing
+import SwiftUI
+import LyricsXCore
 @testable import LyricsXApp
 
 // This suite owns NSApplication's event pump. Run it in its own process so it
@@ -86,4 +88,94 @@ import Testing
         print(String(format: "Native frame delivery: requested %d Hz; measured %.1f callbacks/s; tracking and main-window minimize/close preserved overlay callbacks",
                      overlayFrames.requestedFrameRate, measured))
     }
+    @Test func lyricListResetsForPreludeCachedTrackChangeAndLateLoading() async throws {
+        _ = NSApplication.shared
+        NSApp.finishLaunching()
+        struct Repository: LyricsRepository {
+            func lyrics(for track: Track, forceRefresh: Bool) -> AsyncThrowingStream<LyricCandidate, Error> {
+                AsyncThrowingStream { $0.finish() }
+            }
+            func save(_ document: LyricsDocument, for track: Track) async throws {}
+        }
+        let suite = "LyricsXTests-" + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let prefs = Preferences(defaults: defaults)
+        prefs.reduceMotion = true
+        let model = AppModel(repository: Repository(), preferences: prefs)
+        let first = Track(playerID: "test", playerName: "Test", title: "First", duration: 200)
+        let second = Track(playerID: "test", playerName: "Test", title: "Second", duration: 200)
+        let doc = LyricsDocument(lines: (0..<40).map {
+            .init(id: $0, time: 10 + Double($0) * 3, text: "Original fixture line \($0)")
+        })
+        model.session.accept(.init(track: first, position: 75, isPlaying: false), shouldSearch: false)
+        model.session.use(doc, persist: false)
+        model.mainWindowVisible = true
+        let panel = NSPanel(contentRect: .init(x: 40, y: 180, width: 540, height: 480),
+            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        panel.level = .floating
+        let host = NSHostingView(rootView: LyricsScrollView(model: model))
+        panel.contentView = host; panel.orderFrontRegardless()
+        defer { panel.close(); model.stop() }
+        func settle() async throws {
+            for _ in 0..<12 {
+                runTracking(for: 0.025, mode: .default)
+                try await Task.sleep(for: .milliseconds(5))
+            }
+        }
+        func scrollView(_ view: NSView) -> NSScrollView? {
+            if let scroll = view as? NSScrollView { return scroll }
+            return view.subviews.lazy.compactMap { scrollView($0) }.first
+        }
+        func offset() throws -> CGFloat {
+            let scroll = try #require(scrollView(host))
+            return scroll.contentView.bounds.minY
+        }
+        try await settle()
+        #expect(try offset() > 300)
+        model.session.seek(to: 0); model.updateMainLyricSelection()
+        try await settle()
+        #expect(model.mainLyricIndex == nil)
+        #expect(try abs(offset()) < 2)
+
+        model.session.seek(to: 75); model.updateMainLyricSelection()
+        try await settle()
+        #expect(try offset() > 300)
+        // A cached document can arrive in the same UI update and reuse its ID.
+        // Leave the old main selection until the next tick to expose that race.
+        model.session.accept(.init(track: second, position: 0, isPlaying: false), shouldSearch: false)
+        model.session.use(doc, persist: false)
+        try await settle()
+        #expect(try abs(offset()) < 2)
+        model.updateMainLyricSelection()
+
+        model.session.seek(to: 75); model.updateMainLyricSelection()
+        try await settle()
+        model.session.accept(.init(track: first, position: 0, isPlaying: false), shouldSearch: false)
+        model.updateMainLyricSelection()
+        try await settle()
+        #expect(scrollView(host) == nil)
+        model.session.use(doc, persist: false); model.updateMainLyricSelection()
+        try await settle()
+        #expect(try abs(offset()) < 2)
+        model.mainWindowVisible = false
+        model.session.seek(to: 75); model.updateMainLyricSelection()
+        model.mainWindowVisible = true
+        try await settle()
+        #expect(try offset() > 300)
+        prefs.reduceMotion = false
+        model.session.seek(to: 0); model.updateMainLyricSelection()
+        try await settle()
+        model.session.seek(to: 75); model.updateMainLyricSelection()
+        runTracking(for: 0.05, mode: .default)
+        model.session.accept(.init(track: second, position: 0, isPlaying: false), shouldSearch: false)
+        model.session.use(doc, persist: false); model.updateMainLyricSelection()
+        try await settle()
+        #expect(try abs(offset()) < 2)
+        try await settle()
+        #expect(try abs(offset()) < 2)
+        print("Native lyric scrolling: prelude, cached song change, late loading, window return and interrupted animation passed")
+    }
+
 }

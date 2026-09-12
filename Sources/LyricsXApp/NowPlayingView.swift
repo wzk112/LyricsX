@@ -84,9 +84,24 @@ private struct PlaybackProgressView: View {
 }
 
 struct LyricsScrollView: View {
+    let model: AppModel
+    private struct ContentID: Hashable {
+        var track: String?
+        var document: UUID?
+    }
+    var body: some View {
+        // Browsing, pending return timers and native scroll offsets belong to
+        // this song/version. Line changes keep the same view and animation.
+        LyricsScrollContent(model: model)
+            .id(ContentID(track: model.session.track?.id, document: model.session.document?.id))
+    }
+}
+
+private struct LyricsScrollContent: View {
     @Bindable var model: AppModel
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @State private var browsing = false
+    @State private var position = ScrollPosition(edge: .top)
     @State private var returnTask: Task<Void, Never>?
     @Environment(\.openWindow) private var openWindow
     private var reduced: Bool { systemReduceMotion || model.preferences.reduceMotion }
@@ -99,6 +114,7 @@ struct LyricsScrollView: View {
                     syncedLyrics(doc)
                 } else {
                     ScrollView { Text(doc.plainText ?? "").font(.system(size: 26, weight: .semibold)).lineSpacing(16).frame(maxWidth: .infinity, alignment: .leading).padding(45).textSelection(.enabled) }
+                        .scrollPosition($position)
                         .safeAreaInset(edge: .top) { Text("此歌词暂无时间轴").font(.caption).foregroundStyle(.secondary).padding(12) }
                 }
             } else if model.session.track == nil {
@@ -117,7 +133,7 @@ struct LyricsScrollView: View {
                 Button { browsing = false } label: { Label("回到当前歌词", systemImage: "location.fill") }
                     .buttonStyle(.glass).padding(.bottom, 20).transition(.opacity)
             }
-        }
+        }.onDisappear { returnTask?.cancel(); returnTask = nil }
     }
     private var trackTitlePlaceholder: some View {
         VStack(spacing: 18) {
@@ -143,43 +159,49 @@ struct LyricsScrollView: View {
     }
     private func syncedLyrics(_ doc: LyricsDocument) -> some View {
         GeometryReader { geometry in
-            ScrollViewReader { reader in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 26) {
-                        ForEach(doc.lines) { line in
-                            lyricRow(line, doc: doc, width: geometry.size.width).id(line.id)
-                        }
-                    }.padding(.horizontal, geometry.size.width < 440 ? 22 : 36).padding(.vertical, geometry.size.height * 0.38)
-                }
-                .scrollIndicators(.hidden)
-                .onScrollPhaseChange { _, phase in
-                    if phase == .interacting {
-                        browsing = true; returnTask?.cancel()
-                    } else if phase == .idle, browsing {
-                        returnTask = Task { do { try await Task.sleep(for: .seconds(5)) } catch { return }; browsing = false }
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 26) {
+                    ForEach(doc.lines) { line in
+                        lyricRow(line, doc: doc, width: geometry.size.width).id(line.id)
                     }
                 }
-                .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.13), .init(color: .black, location: 0.83), .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
-                .onChange(of: model.mainLyricIndex) { _, index in
-                    guard model.mainWindowVisible, !browsing, let index else { return }
-                    withAnimation(reduced ? nil : LyricMotion.following(lines: doc.lines, index: index)) { reader.scrollTo(index, anchor: .center) }
-                }
-                .onChange(of: browsing) { _, browsing in
-                    if model.mainWindowVisible, !browsing, let index = model.mainLyricIndex {
-                        withAnimation(reduced ? nil : LyricMotion.animation) { reader.scrollTo(index, anchor: .center) }
-                    }
-                }
-                .onChange(of: doc.id, initial: true) { _, _ in
-                    returnTask?.cancel()
-                    browsing = false
-                    if model.mainWindowVisible { reader.scrollTo(model.mainLyricIndex ?? 0, anchor: .center) }
-                }
-                .onChange(of: model.mainWindowVisible) { _, visible in
-                    returnTask?.cancel()
-                    if visible { reader.scrollTo(model.mainLyricIndex ?? 0, anchor: .center) }
+                .scrollTargetLayout()
+                .padding(.horizontal, geometry.size.width < 440 ? 22 : 36)
+                .padding(.vertical, geometry.size.height * 0.38)
+            }
+            .scrollPosition($position)
+            .scrollIndicators(.hidden)
+            .onScrollPhaseChange { _, phase in
+                if phase == .interacting {
+                    browsing = true; returnTask?.cancel()
+                } else if phase == .idle, browsing {
+                    returnTask = Task { do { try await Task.sleep(for: .seconds(5)) } catch { return }; browsing = false }
                 }
             }
-        }.onDisappear { returnTask?.cancel() }
+            .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.13), .init(color: .black, location: 0.83), .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
+            .onChange(of: model.mainLyricIndex) { _, _ in
+                guard !browsing else { return }
+                follow(doc, animated: true)
+            }
+            .onChange(of: browsing) { _, browsing in
+                if !browsing { follow(doc, animated: true) }
+            }
+            .onChange(of: model.mainWindowVisible, initial: true) { _, visible in
+                returnTask?.cancel(); returnTask = nil
+                browsing = false
+                if visible { follow(doc, animated: false) }
+            }
+        }
+    }
+    private func follow(_ doc: LyricsDocument, animated: Bool) {
+        guard model.mainWindowVisible else { return }
+        // A newly loaded document can arrive before the cached UI selection.
+        // Resolve once against its own timeline, including the prelude (nil).
+        let index = doc.index(at: model.session.position)
+        withAnimation(animated && !reduced && index != nil ? LyricMotion.following(lines: doc.lines, index: index) : nil) {
+            if let index { position.scrollTo(id: doc.lines[index].id, anchor: .center) }
+            else { position.scrollTo(edge: .top) }
+        }
     }
     private func lyricRow(_ line: LyricLine, doc: LyricsDocument, width: Double) -> some View {
         let active = line.id == model.mainLyricIndex
