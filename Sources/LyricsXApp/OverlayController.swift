@@ -33,6 +33,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private let root = NSView()
     private let tint = NSView()
     private let viewport: OverlayViewport
+    private let presentation = OverlayPresentation()
     private let controls: NSHostingView<OverlayControlStrip>
     private unowned let model: AppModel
     private let frameAutosaveName: String?
@@ -59,7 +60,9 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private var screenObserver: NSObjectProtocol?
     private var accessibilityObserver: NSObjectProtocol?
 
-    var isRenderingLyrics: Bool { lastVisible && !hoverHidden && !model.overlayUsesCompactPresentation }
+    var isRenderingLyrics: Bool { lastVisible && !hoverHidden && !(presentation.held?.compact ?? model.overlayUsesCompactPresentation) }
+    // A compact intro still needs an accurate wake-up for the first lyric.
+    var needsPreciseLyricTicks: Bool { lastVisible && !hoverHidden && model.session.document?.isSynced == true && !model.session.documentIsPlaceholder }
     var controlsView: NSView { controls }
     var lyricHostingView: NSView { content }
     private var positionDefaultsKey: String? { frameAutosaveName.map { "LyricsX.OverlayPosition.\($0)" } }
@@ -75,7 +78,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         let viewport = OverlayViewport(width: model.preferences.overlayWidth)
         self.viewport = viewport
-        content = NSHostingView(rootView: OverlayView(model: model, viewport: viewport))
+        content = NSHostingView(rootView: OverlayView(model: model, viewport: viewport, presentation: presentation))
         controls = NSHostingView(rootView: OverlayControlStrip(model: model))
         super.init()
         for window in [panel as NSPanel, controlPanel] {
@@ -184,6 +187,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     func stop() {
+        presentation.stop()
         cancelResize()
         stopped = true
         resizeGeneration += 1
@@ -199,6 +203,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     private func sync() {
+        presentation.update(model: model)
         let prefs = model.preferences
         if model.session.isPlaying && !wasPlaying { explicitShowWhilePaused = false }
         wasPlaying = model.session.isPlaying
@@ -299,10 +304,11 @@ final class OverlayController: NSObject, NSWindowDelegate {
         guard !stopped, !dragging else { return }
         let p = model.preferences
         let maximum = p.overlayLayoutWidth
-        let compact = model.overlayUsesCompactPresentation
+        let compact = presentation.held?.compact ?? model.overlayUsesCompactPresentation
         // No observation of the 60 Hz clock: only a line/setting change can
         // request a new size. The existing hover timer expires shrink holds.
-        let document = model.session.document, index = model.session.currentLineIndex
+        let document = presentation.held?.document ?? model.session.document
+        let index = presentation.held?.index ?? model.session.currentLineIndex
         let configuration = [maximum, p.fontSize, p.translationFontSize,
             p.nextLineFontSize, Double(OverlaySecondaryMode.allCases.firstIndex(of: p.overlaySecondaryMode) ?? 0),
             p.overlayAdaptiveSize ? 1 : 0, compact ? 1 : 0, p.showTranslation ? 1 : 0]
@@ -408,52 +414,51 @@ final class OverlayController: NSObject, NSWindowDelegate {
 struct OverlayView: View {
     @Bindable var model: AppModel
     var viewport: OverlayViewport
+    var presentation: OverlayPresentation?
     @State private var windowVisible = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         let maximum = model.preferences.overlayLayoutWidth
-        let compact = model.overlayUsesCompactPresentation
-        let height = presentationHeight(maximum: maximum)
-        let transition = contentTransition
+        let display = presentation?.held ?? OverlayDisplaySnapshot(model: model, at: ProcessInfo.processInfo.systemUptime)
+        let compact = display.compact
+        let height = presentationHeight(maximum: maximum, display: display)
+        let transition = contentTransition(display: display)
         VStack(spacing: 0) {
-            if model.overlayUsesCompactPresentation {
-                // Reserve the same top strip for controls in both layouts.
-                Spacer(minLength: 22)
+            if compact {
                 HStack(spacing: 12) {
                     Group {
-                        if let artwork = model.artwork {
+                        if let artwork = display.artwork {
                             Image(nsImage: artwork).resizable().scaledToFill()
                         } else {
                             ZStack { Color.white.opacity(0.08); Image(systemName: "music.note").font(.system(size: 18)) }
                         }
                     }.frame(width: 42, height: 42).clipShape(.rect(cornerRadius: 9))
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(model.session.track?.title ?? "LyricsX")
+                        Text(display.track?.title ?? "LyricsX")
                             .font(.system(size: 17, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.8)
-                        if model.session.isSearching {
+                        if display.searching {
                             Text("正在加载歌词…").font(.system(size: 12, weight: .medium)).opacity(0.8)
-                        } else if let artist = model.session.track?.artist, !artist.isEmpty {
+                        } else if let artist = display.track?.artist, !artist.isEmpty {
                             Text(artist).font(.system(size: 12, weight: .medium)).lineLimit(1).opacity(0.8)
                         }
                     }.shadow(color: .black.opacity(0.8), radius: 2, y: 1)
-                    Spacer(minLength: 0)
-                }.frame(width: max(260, viewport.width - 60), alignment: .leading)
-                Spacer(minLength: 2)
+                }.frame(maxWidth: max(260, viewport.width - 60), alignment: .center)
             } else {
                 HStack(spacing: 6) {
-                    Text(model.session.track?.title ?? "LyricsX").lineLimit(1)
-                    if let artist = model.session.track?.artist, !artist.isEmpty { Text("· " + artist).lineLimit(1).opacity(0.85) }
+                    Text(display.track?.title ?? "LyricsX").lineLimit(1)
+                    if let artist = display.track?.artist, !artist.isEmpty { Text("· " + artist).lineLimit(1).opacity(0.85) }
                     Spacer(minLength: 4)
                     Color.clear.frame(width: 126, height: 30)
                 }.font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.92)).frame(width: max(260, viewport.width - 60), height: 30)
                 Spacer(minLength: 4)
                 ZStack {
-                    if let doc = model.session.document, let index = model.session.currentLineIndex {
+                    if let doc = display.document, let index = display.index {
                         OverlayLyricsContent(preferences: model.preferences, document: doc, index: index,
-                                             lyricTime: { doc.lyricTime(for: model.session.position) },
-                                             renderTime: { doc.lyricTime(for: model.session.presentationPosition()) },
-                                             playing: model.session.isPlaying && windowVisible,
-                                             adaptiveCanvasWidth: model.preferences.overlayAdaptiveSize ? maximum - 60 : nil).id(doc.id)
+                                             lyricTime: { doc.lyricTime(for: presentation?.held?.position ?? model.session.position) },
+                                             renderTime: { doc.lyricTime(for: presentation?.held?.position ?? model.session.presentationPosition()) },
+                                             playing: display.playing && windowVisible,
+                                             visible: windowVisible,
+                                             adaptiveCanvasWidth: model.preferences.overlayAdaptiveSize ? maximum - 60 : nil)
                     } else { Text(placeholder) }
                 }.font(.system(size: model.preferences.fontSize, weight: .semibold))
                     .shadow(color: .black.opacity(0.8), radius: 1.5, y: 1)
@@ -465,30 +470,22 @@ struct OverlayView: View {
             .padding(6)
             .frame(width: maximum, height: compact ? 108 : height)
             .modifier(transition)
+            .compositingGroup()
+            .allowedDynamicRange(model.preferences.lyricEmphasis.usesHDR ? .high : .standard)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .background(WindowVisibilityReader { windowVisible = $0 }.frame(width: 0, height: 0))
     }
-    private var contentTransition: OverlayContentTransition {
-        let p = model.preferences, compact = model.overlayUsesCompactPresentation
-        let document = model.session.document, index = model.session.currentLineIndex
-        var identity = OverlayContentIdentity(track: model.session.track?.id, document: document?.id,
-            primary: compact ? (model.session.isSearching ? "正在加载歌词…" : model.session.track?.artist ?? "") : placeholder,
-            compact: compact, artwork: compact ? model.artwork.map(ObjectIdentifier.init) : nil)
-        var incremental = false, duration = 1.0
-        if !compact, let document, let index, document.lines.indices.contains(index) {
-            identity.primary = p.text(document.lines[index].text)
-            let secondary = OverlayTextMeasure.secondary(document: document, index: index, preferences: p)
-            identity.translation = secondary.translation; identity.next = secondary.next
-            let plan = LyricLinePresentation.make(lines: document.lines, index: index, transform: p.text)
-            incremental = (plan?.stablePrefixCount ?? 0) > 0
-            if document.lines.indices.contains(index + 1) { duration = document.lines[index + 1].time - document.lines[index].time }
-        }
-        return OverlayContentTransition(identity: identity, incremental: incremental, lineDuration: duration,
-            reduced: reduceMotion || p.reduceMotion, visible: windowVisible)
+    private func contentTransition(display: OverlayDisplaySnapshot) -> OverlayContentTransition {
+        let p = model.preferences, compact = display.compact
+        let identity = OverlayContentIdentity(track: display.track?.id,
+            primary: compact ? (display.searching ? "正在加载歌词…" : display.track?.artist ?? "") : placeholder,
+            compact: compact, artwork: compact ? display.artwork.map(ObjectIdentifier.init) : nil)
+        return OverlayContentTransition(identity: identity.songScope,
+            reduced: reduceMotion || p.reduceMotion, visible: windowVisible, preparingSince: presentation?.preparingSince)
     }
-    private func presentationHeight(maximum: Double) -> Double {
-        guard model.preferences.overlayAdaptiveSize, let document = model.session.document,
-              let index = model.session.currentLineIndex else { return OverlayLayoutMetrics.height(preferences: model.preferences) }
+    private func presentationHeight(maximum: Double, display: OverlayDisplaySnapshot) -> Double {
+        guard model.preferences.overlayAdaptiveSize, let document = display.document,
+              let index = display.index else { return OverlayLayoutMetrics.height(preferences: model.preferences) }
         return OverlayTextMeasure.height(document: document, index: index, preferences: model.preferences, maximumWidth: maximum)
     }
     private var placeholder: String {

@@ -9,6 +9,9 @@ struct OverlayContentIdentity: Equatable {
     var next: String?
     var compact = false
     var artwork: ObjectIdentifier?
+    var songScope: Self {
+        .init(track: track, primary: compact ? primary : "", compact: compact, artwork: compact ? artwork : nil)
+    }
 }
 
 struct OverlayBlurStyle: Equatable {
@@ -41,16 +44,22 @@ struct OverlayContentTransition: ViewModifier {
     var lineDuration = 1.0
     var reduced = false
     var visible = true
+    var preparingSince: Double?
+    var animateInitial = true
     @State private var displayed: OverlayContentIdentity?
     @State private var style = OverlayBlurStyle()
     @State private var clock = LyricArrivalClock()
 
     func body(content: Content) -> some View {
         let pending = displayed != identity
-        let incoming = OverlayBlurStyle.change(from: displayed, to: identity, incremental: incremental, lineDuration: lineDuration)
+        let incoming = displayed == nil && !animateInitial ? OverlayBlurStyle() : OverlayBlurStyle.change(from: displayed, to: identity, incremental: incremental, lineDuration: lineDuration)
         TimelineView(.animation(minimumInterval: 1.0 / 60, paused: reduced || !visible || clock.startedAt == nil)) { _ in
             let now = ProcessInfo.processInfo.systemUptime
-            let blur = pending ? incoming.radius : clock.startedAt.map { style.blur(elapsed: now - $0) } ?? 0
+            let blur: Double = if let preparingSince {
+                3 * LyricMotion.arrivalCurve.value(at: min(1, max(0, (now - preparingSince) / OverlayPresentation.handoverDuration)))
+            } else {
+                pending ? incoming.radius : clock.startedAt.map { style.blur(elapsed: now - $0) } ?? 0
+            }
             content.blur(radius: reduced || !visible ? 0 : blur)
                 .transaction { $0.animation = nil; $0.disablesAnimations = true }
                 .onChange(of: clock.finishedToken(at: now)) { _, token in clock.finish(token) }
@@ -61,6 +70,14 @@ struct OverlayContentTransition: ViewModifier {
             else { clock.cancel() }
         }
         .onChange(of: reduced) { _, value in if value { clock.cancel() } }
+        .onChange(of: preparingSince) { _, value in
+            if reduced || !visible { clock.cancel() }
+            else if value != nil { clock.start(at: ProcessInfo.processInfo.systemUptime, duration: OverlayPresentation.handoverDuration) }
+            else if !pending && !reduced && visible {
+                style = .init(radius: 3, duration: 0.25)
+                clock.start(at: ProcessInfo.processInfo.systemUptime, duration: style.duration)
+            }
+        }
         .onChange(of: visible) { _, value in if !value { clock.cancel() } }
         .onDisappear { clock.cancel() }
     }

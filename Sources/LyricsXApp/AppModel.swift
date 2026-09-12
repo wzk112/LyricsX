@@ -16,7 +16,8 @@ final class AppModel {
     var message: String?
     var showSearch = false
     var showLibrary = false
-    var mainWindowVisible = false
+    var mainWindowVisible = false { didSet { updateMainLyricSelection() } }
+    private(set) var mainLyricIndex: Int?
     private(set) var playbackControlPosition = 0.0
     var artwork: NSImage?
     var library: [LyricsCache.Entry] = []
@@ -40,6 +41,7 @@ final class AppModel {
         bridge.onSnapshot = { [weak self] snapshot in
             guard let self else { return }
             self.session.accept(snapshot, shouldSearch: !self.lyricsBlocked(for: snapshot.track))
+            self.updateMainLyricSelection()
             self.playbackControlPosition = self.session.position
             self.updateArtwork(self.session.track)
         }
@@ -52,9 +54,17 @@ final class AppModel {
             self?.bridge.refresh()
         }
     }
+    private static let gapCharacters = CharacterSet(charactersIn: ".·•…⋯・。 \t\n")
     var overlayUsesCompactPresentation: Bool {
         guard let document = session.document else { return true }
-        return !document.isSynced || session.documentIsPlaceholder
+        guard document.isSynced, !session.documentIsPlaceholder,
+              let index = session.currentLineIndex, document.lines.indices.contains(index) else { return true }
+        let text = document.lines[index].text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty || text.unicodeScalars.allSatisfy(Self.gapCharacters.contains)
+    }
+    func updateMainLyricSelection() {
+        guard mainWindowVisible, mainLyricIndex != session.currentLineIndex else { return }
+        mainLyricIndex = session.currentLineIndex
     }
 
     func start() {
@@ -75,13 +85,14 @@ final class AppModel {
             while !Task.isCancelled {
                 guard let self else { return }
                 self.session.tick()
+                self.updateMainLyricSelection()
                 // Native sliders need far fewer updates than syllable drawing.
                 // Keep the lyric clock precise without relaying every frame
                 // through AppKit's progress-control layout and accessibility.
                 if abs(self.session.position - self.playbackControlPosition) >= 0.2 || !self.session.isPlaying {
                     self.playbackControlPosition = self.session.position
                 }
-                let visible = self.mainWindowVisible || self.overlay?.isRenderingLyrics == true
+                let visible = self.mainWindowVisible || self.overlay?.needsPreciseLyricTicks == true
                 let interval = LyricTickCadence.milliseconds(playing: self.session.isPlaying, visible: visible,
                     document: self.session.document, position: self.session.position)
                 do { try await Task.sleep(for: .milliseconds(interval)) } catch { return }
@@ -108,6 +119,7 @@ final class AppModel {
     }
     func seek(_ time: Double) {
         session.seek(to: time)
+        updateMainLyricSelection()
         playbackControlPosition = session.position
         bridge.send(.seek(time))
     }

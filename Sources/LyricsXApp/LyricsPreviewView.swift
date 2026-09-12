@@ -63,6 +63,15 @@ private enum LyricPreviewSamples {
     ])
 }
 
+struct WindowRenderActivity {
+    private var leaving = false
+    mutating func update(event: Notification.Name?, visible: Bool, miniaturized: Bool, exposed: Bool) -> Bool {
+        if event == NSWindow.willMiniaturizeNotification || event == NSWindow.willCloseNotification { leaving = true }
+        else if !visible || event == NSWindow.didMiniaturizeNotification || event == NSWindow.didDeminiaturizeNotification || event == NSWindow.didBecomeKeyNotification { leaving = false }
+        return !leaving && visible && !miniaturized && exposed
+    }
+}
+
 struct WindowVisibilityReader: NSViewRepresentable {
     var changed: (Bool) -> Void
     func makeNSView(context: Context) -> VisibilityView { let view = VisibilityView(); view.changed = changed; return view }
@@ -70,19 +79,23 @@ struct WindowVisibilityReader: NSViewRepresentable {
 
     final class VisibilityView: NSView {
         var changed: ((Bool) -> Void)?
+        private var activity = WindowRenderActivity()
+        private var reported: Bool?
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             NotificationCenter.default.removeObserver(self)
             if let window {
-                for name in [NSWindow.didChangeOcclusionStateNotification, NSWindow.didMiniaturizeNotification, NSWindow.didDeminiaturizeNotification, NSWindow.willCloseNotification] {
+                for name in [NSWindow.didChangeOcclusionStateNotification, NSWindow.willMiniaturizeNotification, NSWindow.didMiniaturizeNotification, NSWindow.didDeminiaturizeNotification, NSWindow.willCloseNotification, NSWindow.didBecomeKeyNotification] {
                     NotificationCenter.default.addObserver(self, selector: #selector(updateVisibility(_:)), name: name, object: window)
                 }
             }
             DispatchQueue.main.async { [weak self] in self?.updateVisibility(nil) }
         }
         @objc private func updateVisibility(_ notification: Notification?) {
-            let visible = notification?.name != NSWindow.willCloseNotification && window?.isVisible == true && window?.occlusionState.contains(.visible) == true
-            changed?(visible)
+            let visible = activity.update(event: notification?.name, visible: window?.isVisible == true,
+                miniaturized: window?.isMiniaturized == true, exposed: window?.occlusionState.contains(.visible) == true)
+            guard visible != reported else { return }
+            reported = visible; changed?(visible)
         }
     }
 }

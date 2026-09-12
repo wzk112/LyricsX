@@ -71,6 +71,50 @@ import LyricsXServices
     #expect(measurements == 2)
 }
 
+@Test func auxiliaryRowsArriveSmoothlyAndFinishBeforeTheNextFastCue() throws {
+    for interval in [0.08, 0.2, 3.0] {
+        let lines = [LyricLine(id: 0, time: 0, text: "First"), .init(id: 1, time: interval, text: "Next")]
+        let plan = try #require(LyricLinePresentation.make(lines: lines, index: 0))
+        let duration = min(0.42, plan.duration)
+        let first = OverlayAuxiliaryFrame.make(time: 0, plan: plan, changed: true, reduced: false)
+        #expect(first.opacity == 0 && first.offset > 0 && first.blur > 0)
+        let half = OverlayAuxiliaryFrame.make(time: duration / 2, plan: plan, changed: true, reduced: false)
+        #expect(half.opacity > 0 && half.opacity < 1 && abs(half.opacity - 0.5) > 0.1)
+        #expect(half.offset < first.offset && half.blur < first.blur)
+        #expect(OverlayAuxiliaryFrame.make(time: interval, plan: plan, changed: true, reduced: false) == .init())
+        #expect(OverlayAuxiliaryFrame.make(time: 0, plan: plan, changed: false, reduced: false) == .init())
+        #expect(OverlayAuxiliaryFrame.make(time: 0, plan: plan, changed: true, reduced: true) == .init())
+        let growth = plan.withoutEntry(text: "First")
+        #expect(OverlayAuxiliaryFrame.make(time: 0, plan: growth, changed: true, reduced: false) == .init())
+    }
+}
+
+@Test func promotedRowHasAMovingBlurPulseAndSettlesWithoutLingering() throws {
+    let plan = try #require(LyricLinePresentation.make(lines: [.init(id: 0, time: 0, text: "First"), .init(id: 1, time: 3, text: "Next")], index: 0))
+    let first = OverlayMotionFrame.make(time: 0, plan: plan, distance: 80, nextScale: 0.5, reduced: false)
+    let middle = OverlayMotionFrame.make(time: 0.29, plan: plan, distance: 80, nextScale: 0.5, reduced: false)
+    #expect(first.blur == 0.45 && middle.blur > first.blur && middle.blur < 2)
+    #expect(abs(middle.offset - 40) > 5 && middle.offset < first.offset)
+    #expect(OverlayMotionFrame.make(time: 0.58, plan: plan, distance: 80, nextScale: 0.5, reduced: false) == .init())
+    #expect(OverlayMotionFrame.make(time: 0, plan: plan, distance: 80, nextScale: 0.5, reduced: true) == .init())
+}
+
+@Test func lyricAndTranslationChangesDoNotRestartTheSongHeaderTransition() {
+    let first = OverlayContentIdentity(track: "song", document: UUID(), primary: "First", translation: "第一句", next: "Next")
+    var changed = first
+    changed.primary = "Next"; changed.translation = "下一句"; changed.next = "Later"
+    #expect(first.songScope == changed.songScope)
+    changed.document = UUID()
+    #expect(first.songScope == changed.songScope)
+    changed.track = "another song"
+    #expect(first.songScope != changed.songScope)
+    changed = first; changed.compact = true
+    #expect(first.songScope != changed.songScope)
+    let compact = changed.songScope
+    changed.primary = "Loading lyrics"
+    #expect(compact != changed.songScope)
+}
+
 /// Optional local verification: never copies lyric contents or private paths
 /// into fixtures, logs, build products or the release.
 @Test func localRapidLyricsUseTheProductionParserAndCadence() throws {

@@ -24,7 +24,7 @@ struct NowPlayingView: View {
                     }.padding(.horizontal, 22).padding(.top, 8)
                 } else { expandedPlayer(geometry.size) }
             }
-            .lyricArrival(trigger: model.session.track?.id, reduced: reduceMotion || model.preferences.reduceMotion, distance: 8)
+            .lyricArrival(trigger: model.session.track?.id, reduced: reduceMotion || model.preferences.reduceMotion || !model.mainWindowVisible, distance: 8)
         }
     }
     private func expandedPlayer(_ size: CGSize) -> some View {
@@ -159,31 +159,35 @@ struct LyricsScrollView: View {
                     }
                 }
                 .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.13), .init(color: .black, location: 0.83), .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
-                .onChange(of: model.session.currentLineIndex) { _, index in
-                    guard !browsing, let index else { return }
+                .onChange(of: model.mainLyricIndex) { _, index in
+                    guard model.mainWindowVisible, !browsing, let index else { return }
                     withAnimation(reduced ? nil : LyricMotion.following(lines: doc.lines, index: index)) { reader.scrollTo(index, anchor: .center) }
                 }
                 .onChange(of: browsing) { _, browsing in
-                    if !browsing, let index = model.session.currentLineIndex {
+                    if model.mainWindowVisible, !browsing, let index = model.mainLyricIndex {
                         withAnimation(reduced ? nil : LyricMotion.animation) { reader.scrollTo(index, anchor: .center) }
                     }
                 }
                 .onChange(of: doc.id, initial: true) { _, _ in
                     returnTask?.cancel()
                     browsing = false
-                    reader.scrollTo(model.session.currentLineIndex ?? 0, anchor: .center)
+                    if model.mainWindowVisible { reader.scrollTo(model.mainLyricIndex ?? 0, anchor: .center) }
+                }
+                .onChange(of: model.mainWindowVisible) { _, visible in
+                    returnTask?.cancel()
+                    if visible { reader.scrollTo(model.mainLyricIndex ?? 0, anchor: .center) }
                 }
             }
         }.onDisappear { returnTask?.cancel() }
     }
     private func lyricRow(_ line: LyricLine, doc: LyricsDocument, width: Double) -> some View {
-        let active = line.id == model.session.currentLineIndex
-        let distance = abs(line.id - (model.session.currentLineIndex ?? 0))
+        let active = line.id == model.mainLyricIndex
+        let distance = abs(line.id - (model.mainLyricIndex ?? 0))
         return Button {
             model.seek(doc.seekPosition(for: line)); browsing = false
         } label: {
             VStack(alignment: .leading, spacing: 9) {
-                LiveLyricText(session: model.session, line: line, document: doc, active: active && model.mainWindowVisible,
+                LiveLyricText(session: model.session, line: line, document: doc, active: active, rendering: model.mainWindowVisible,
                               text: line.text.isEmpty ? "•••" : model.preferences.text(line.text), effects: model.preferences.lyricEmphasis)
                     .font(.system(size: model.preferences.mainLyricFontSize * min(1, max(0.8, width / 480)), weight: .bold)).tracking(-0.4).fixedSize(horizontal: false, vertical: true)
                     .foregroundStyle(active ? .white : .white.opacity(browsing ? 0.55 : distance <= 1 ? 0.25 : 0.15))
@@ -193,7 +197,7 @@ struct LyricsScrollView: View {
             }.frame(maxWidth: .infinity, alignment: .leading)
                 .scaleEffect(active ? 1 : 0.96, anchor: .leading)
                 .blur(radius: reduced || browsing || active ? 0 : min(2.05, Double(distance) * 0.7))
-                .animation(reduced ? nil : LyricMotion.following(lines: doc.lines, index: model.session.currentLineIndex), value: distance)
+                .animation(reduced || !model.mainWindowVisible ? nil : LyricMotion.following(lines: doc.lines, index: model.mainLyricIndex), value: distance)
                 .contentShape(.rect)
         }.buttonStyle(.plain).accessibilityLabel(line.text.isEmpty ? "间奏" : line.text)
             .accessibilityHint("跳转到 " + timeString(doc.seekPosition(for: line)))

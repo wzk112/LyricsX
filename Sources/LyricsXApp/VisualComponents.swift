@@ -66,6 +66,7 @@ struct LiveLyricText: View {
     let line: LyricLine
     let document: LyricsDocument
     let active: Bool
+    var rendering = true
     let text: String
     var effects = LyricEmphasisOptions()
     var arrival: LyricLinePresentation?
@@ -73,8 +74,8 @@ struct LiveLyricText: View {
         if line.hasWordTiming || arrival != nil {
             // Keep this view identity when a row becomes current. Only active
             // rows observe the session clock; others use the native draw path.
-            let time = active ? document.lyricTime(for: session.position) : 0
-            LyricRenderTimeline(running: active && session.isPlaying && LyricRenderTimelineActivity.needsFrames(line: line, time: time, arrival: arrival),
+            let time = active ? document.lyricTime(for: rendering ? session.position : session.presentationPosition()) : 0
+            LyricRenderTimeline(running: rendering && active && session.isPlaying && LyricRenderTimelineActivity.needsFrames(line: line, time: time, arrival: arrival),
                                 sampledTime: time, preciseTime: { document.lyricTime(for: session.presentationPosition()) }) { frameTime in
                 WordHighlight(line: line, time: frameTime, active: active, text: text, effects: effects, arrival: arrival)
                     .transaction { $0.animation = nil; $0.disablesAnimations = true }
