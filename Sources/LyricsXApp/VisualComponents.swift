@@ -1,24 +1,6 @@
 import SwiftUI
 import LyricsXCore
 
-private struct LyricDissolveModifier: ViewModifier {
-    var blur: Double
-    var opacity: Double
-    var offset: Double
-    func body(content: Content) -> some View {
-        content.blur(radius: blur).opacity(opacity).offset(y: offset)
-    }
-}
-
-extension AnyTransition {
-    static var lyricDissolve: AnyTransition {
-        .asymmetric(
-            insertion: .modifier(active: LyricDissolveModifier(blur: 3, opacity: 0, offset: 3), identity: LyricDissolveModifier(blur: 0, opacity: 1, offset: 0))
-                .animation(.smooth(duration: 0.5)),
-            removal: .opacity.animation(.linear(duration: 0.09)))
-    }
-}
-
 struct AmbientBackground: View {
     var artwork: NSImage?
     var moving: Bool

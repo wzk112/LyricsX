@@ -11,6 +11,7 @@ final class AppModel {
     let session: LyricsSession
     let store: LyricsStore
     let bridge = PlayerBridge()
+    let dockVisibility: DockVisibilityController
     var playerError: String?
     var message: String?
     var showSearch = false
@@ -31,6 +32,7 @@ final class AppModel {
 
     init(repository: (any LyricsRepository)? = nil, preferences: Preferences = Preferences()) {
         self.preferences = preferences
+        dockVisibility = DockVisibilityController(shouldShow: { preferences.showDockIcon })
         let configurationReader = preferences.sourceConfigurationReader
         store = LyricsStore(cache: LyricsCache(directory: preferences.directory), configuration: { configurationReader.read() })
         session = LyricsSession(repository: repository ?? store)
@@ -56,6 +58,7 @@ final class AppModel {
     func start() {
         guard ticker == nil else { return }
         presentationStopped = false
+        dockVisibility.start()
         observeDockVisibility()
         overlay = OverlayController(model: self)
         bridge.mode = preferences.playerMode
@@ -79,6 +82,7 @@ final class AppModel {
     }
     func stop() {
         ticker?.cancel(); ticker = nil; artworkTask?.cancel(); presentationStopped = true
+        dockVisibility.stop()
         overlay?.stop(); bridge.stop(); session.stop()
         for token in wakeObservers { NSWorkspace.shared.notificationCenter.removeObserver(token) }
     }
@@ -89,7 +93,7 @@ final class AppModel {
     private func observeDockVisibility() {
         guard !presentationStopped else { return }
         withObservationTracking {
-            _ = NSApp.setActivationPolicy(preferences.showDockIcon ? .regular : .accessory)
+            dockVisibility.reconcile()
         } onChange: { [weak self] in
             Task { @MainActor in self?.observeDockVisibility() }
         }

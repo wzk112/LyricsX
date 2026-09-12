@@ -125,11 +125,24 @@ private struct MenuBarLyricLabel: View {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var model: AppModel?
     private var hotkeys: GlobalHotkeys?
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // LSUIElement prevents a Dock flash during cold launch. Promote only
+        // when the persisted preference requests a normal foreground app.
+        let show = UserDefaults.standard.object(forKey: "showDockIcon") as? Bool ?? true
+        _ = NSApp.setActivationPolicy(show ? .regular : .accessory)
+    }
     func configure(_ model: AppModel) {
         guard self.model == nil else { return }
         self.model = model; model.start(); hotkeys = GlobalHotkeys(model: model)
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationWillTerminate(_ notification: Notification) { hotkeys?.stop(); model?.stop() }
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { model?.showMainWindow?(); return true }
+    func applicationDidBecomeActive(_ notification: Notification) { model?.dockVisibility.applicationActivated() }
+    func applicationDidFinishLaunching(_ notification: Notification) { model?.dockVisibility.applicationActivated() }
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        model?.dockVisibility.applicationActivated()
+        guard let show = model?.showMainWindow else { return true }
+        show()
+        return false // The main window has an explicit owner; skip default reopening.
+    }
 }

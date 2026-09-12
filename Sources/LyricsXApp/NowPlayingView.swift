@@ -5,8 +5,6 @@ struct NowPlayingView: View {
     @Bindable var model: AppModel
     @Environment(\.openWindow) private var openWindow
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var changingTrack = false
-    @State private var transitionTask: Task<Void, Never>?
     var body: some View {
         GeometryReader { geometry in
             let compact = geometry.size.width < 780 || geometry.size.height < 430
@@ -26,20 +24,8 @@ struct NowPlayingView: View {
                     }.padding(.horizontal, 22).padding(.top, 8)
                 } else { expandedPlayer(geometry.size) }
             }
-            .blur(radius: changingTrack ? 3 : 0)
-            .opacity(changingTrack ? 0.7 : 1)
+            .lyricArrival(trigger: model.session.track?.id, reduced: reduceMotion || model.preferences.reduceMotion, distance: 8)
         }
-        .onChange(of: model.session.track?.id) { _, _ in
-            transitionTask?.cancel()
-            changingTrack = false
-            guard !reduceMotion, !model.preferences.reduceMotion else { return }
-            changingTrack = true
-            transitionTask = Task {
-                do { try await Task.sleep(for: .milliseconds(40)) } catch { return }
-                withAnimation(.easeOut(duration: 0.45)) { changingTrack = false }
-            }
-        }
-        .onDisappear { transitionTask?.cancel(); changingTrack = false }
     }
     private func expandedPlayer(_ size: CGSize) -> some View {
         let columnWidth = min(330, max(220, size.width * 0.31))
@@ -175,14 +161,15 @@ struct LyricsScrollView: View {
                 .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.13), .init(color: .black, location: 0.83), .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
                 .onChange(of: model.session.currentLineIndex) { _, index in
                     guard !browsing, let index else { return }
-                    withAnimation(reduced ? nil : .spring(response: 0.72, dampingFraction: 0.83)) { reader.scrollTo(index, anchor: .center) }
+                    withAnimation(reduced ? nil : LyricMotion.animation) { reader.scrollTo(index, anchor: .center) }
                 }
                 .onChange(of: browsing) { _, browsing in
                     if !browsing, let index = model.session.currentLineIndex {
-                        withAnimation(reduced ? nil : .spring(response: 0.7, dampingFraction: 0.88)) { reader.scrollTo(index, anchor: .center) }
+                        withAnimation(reduced ? nil : LyricMotion.animation) { reader.scrollTo(index, anchor: .center) }
                     }
                 }
                 .onChange(of: doc.id, initial: true) { _, _ in
+                    returnTask?.cancel()
                     browsing = false
                     reader.scrollTo(model.session.currentLineIndex ?? 0, anchor: .center)
                 }
@@ -205,8 +192,8 @@ struct LyricsScrollView: View {
                 }
             }.frame(maxWidth: .infinity, alignment: .leading)
                 .scaleEffect(active ? 1 : 0.96, anchor: .leading)
-                .blur(radius: reduced || browsing || active ? 0 : min(1.3, Double(distance) * 0.35))
-                .animation(reduced ? nil : .smooth(duration: 0.55), value: distance)
+                .blur(radius: reduced || browsing || active ? 0 : min(1.8, Double(distance) * 0.6))
+                .animation(reduced ? nil : LyricMotion.animation, value: distance)
                 .contentShape(.rect)
         }.buttonStyle(.plain).accessibilityLabel(line.text.isEmpty ? "间奏" : line.text)
             .accessibilityHint("跳转到 " + timeString(doc.seekPosition(for: line)))

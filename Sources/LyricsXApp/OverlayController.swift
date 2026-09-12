@@ -388,12 +388,11 @@ struct OverlayView: View {
                         .padding(.top, secondary.translation != nil ? model.preferences.overlaySecondarySpacing : model.preferences.overlayPrimarySpacing)
                 }
                   }.frame(maxWidth: .infinity)
-                    .id(lyricIdentity)
-                    .transition(reduceMotion || model.preferences.reduceMotion ? .opacity : .lyricDissolve)
+                    .lyricArrival(trigger: lyricIdentity, reduced: reduceMotion || model.preferences.reduceMotion,
+                                  distance: min(20, max(10, model.preferences.fontSize * 0.55)))
                 }.font(.system(size: model.preferences.fontSize, weight: .semibold))
                     .shadow(color: .black.opacity(0.8), radius: 1.5, y: 1)
                     .shadow(color: .black.opacity(0.35), radius: 5, y: 1)
-                    .animation(reduceMotion || model.preferences.reduceMotion ? nil : .smooth(duration: 0.48), value: lyricIdentity)
                 Spacer(minLength: 8)
             }
         }.padding(.horizontal, 24).padding(.vertical, 12)

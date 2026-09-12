@@ -16,12 +16,12 @@ struct LyricsPreviewView: View {
                 VStack(alignment: .leading, spacing: 20) {
                     Text("动效预览").font(.headline).foregroundStyle(.secondary)
                     Text("演示内容仅在此窗口显示").font(.caption).foregroundStyle(.secondary)
-                    WordHighlight(line: doc.lines[index], time: time, active: true, text: doc.lines[index].text)
-                        .font(.system(size: 30, weight: .semibold))
-                        .id(index).transition(.opacity.combined(with: .offset(y: 8)))
-                    Text(doc.lines[index].translation ?? "").font(.callout).foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 16) {
+                        WordHighlight(line: doc.lines[index], time: time, active: true, text: doc.lines[index].text)
+                            .font(.system(size: 30, weight: .semibold))
+                        Text(doc.lines[index].translation ?? "").font(.callout).foregroundStyle(.secondary)
+                    }.lyricArrival(trigger: index, reduced: reduceMotion)
                 }.frame(maxWidth: .infinity, alignment: .leading)
-                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.35), value: index)
             }
         }.padding(40).frame(minWidth: 680, minHeight: 380)
             .background(Color(white: 0.08)).preferredColorScheme(.dark)

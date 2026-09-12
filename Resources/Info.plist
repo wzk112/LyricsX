@@ -7,11 +7,12 @@
 <key>CFBundleName</key><string>LyricsX</string>
 <key>CFBundleDisplayName</key><string>LyricsX</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>2.0.10</string>
-<key>CFBundleVersion</key><string>218</string>
+<key>CFBundleShortVersionString</key><string>2.0.11</string>
+<key>CFBundleVersion</key><string>219</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
 <key>LSMinimumSystemVersion</key><string>26.0</string>
 <key>NSHighResolutionCapable</key><true/>
+<key>LSUIElement</key><true/>
 <key>NSAppleEventsUsageDescription</key><string>LyricsX 读取当前歌曲和播放进度，以显示同步歌词，并响应你的播放控制。</string>
 <key>NSHumanReadableCopyright</key><string>LyricsX contributors. MPL-2.0. Modern Swift rewrite.</string>
 <key>NSPrincipalClass</key><string>NSApplication</string>
