@@ -59,6 +59,31 @@ func liveRomanizedSongResolvesAndSearchesNativeTitle() async throws {
     #expect(results.count == 1 && results.first?.score ?? 0 >= 60)
 }
 
+@Test func delayedNativeAliasReopensParkedAutomaticSources() async throws {
+    let resolver = TrackAliasResolver { request in
+        try await Task.sleep(for: .milliseconds(20))
+        return Data((request.url?.path == "/search" ? seedJSON : aliasJSON).utf8)
+    }
+    let store = LyricsStore(cache: temporaryCache(), aliasResolver: resolver, searchBudget: .seconds(1)) { query, _, config, _ in
+        .init { stream in
+            if query.title == nativeTitle {
+                var doc = nativeDocument(translation: "送达吧", words: true)
+                doc.source = config.enabled.first!
+                stream.yield(doc)
+            } else {
+                stream.yield(.init(title: romanTrack.title, artist: romanTrack.artist, source: config.enabled.first!,
+                                   lines: [.init(id: 0, time: 0, text: "Original result")]))
+            }
+            stream.finish()
+        }
+    }
+    var results: [LyricCandidate] = []
+    for try await result in store.lyrics(for: romanTrack, forceRefresh: true) { results.append(result) }
+    let best = try #require(results.max { $0.score < $1.score })
+    #expect(best.document.title == nativeTitle && best.document.hasWordTiming && best.document.hasTranslation)
+    #expect(!best.isProvisional)
+}
+
 @Test func titleOnlyAutomaticQueryReachesResultsAvailableInManualSearch() async throws {
     let track = Track(playerID: "test", playerName: "", title: "Song", artist: "Singer", duration: 200)
     let store = LyricsStore(cache: temporaryCache(), aliasResolver: emptyResolver()) { _, keyword, _, _ in

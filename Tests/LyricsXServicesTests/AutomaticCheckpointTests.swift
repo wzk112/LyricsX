@@ -170,6 +170,78 @@ private actor ManualSearchProbe {
     }
 }
 
+@Test func automaticFinalizesFeatureFallbackEvenWhenAnotherProviderNeverFinishes() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    var config = SourceConfiguration(); config.enabled = ["NetEase", "QQMusic"]; config.sourceOrder = ["NetEase", "QQMusic"]
+    let settings = config
+    let track = Track(playerID: "test", playerName: "", title: "Song", artist: "Singer")
+    let store = LyricsStore(cache: .init(directory: directory), configuration: { settings },
+                            aliasResolver: TrackAliasResolver { _ in Data(#"{"results":[]}"#.utf8) },
+                            searchBudget: .seconds(1), fallbackGrace: .milliseconds(40)) { _, _, config, _ in
+        .init { stream in
+            let task = Task {
+                do {
+                    if config.enabled.contains("QQMusic") {
+                        var doc = try checkpointFixture(); doc.source = "QQMusic"
+                        stream.yield(doc)
+                    }
+                    // Both sources remain mid-download; the grace deadline
+                    // must finish the search rather than the overall timeout.
+                    try await Task.sleep(for: .seconds(10)); stream.finish()
+                } catch { stream.finish(throwing: error) }
+            }
+            stream.onTermination = { _ in task.cancel() }
+        }
+    }
+    let started = ContinuousClock.now
+    var values: [LyricCandidate] = []
+    for try await value in store.lyrics(for: track, forceRefresh: true) { values.append(value) }
+    #expect(started.duration(to: .now) < .milliseconds(500))
+    let best = try #require(values.last)
+    #expect(best.document.hasTranslation && !best.document.hasWordTiming && !best.isProvisional)
+}
+
+@Test(arguments: [false, true]) func automaticSettlesWithOneFeatureAfterFairSourceRounds(wordOnly: Bool) async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let track = Track(playerID: "test", playerName: "", title: "夜空中的星 (Full Version)", artist: "Singer", duration: 180)
+    let probe = ManualSearchProbe()
+    var config = SourceConfiguration(); config.enabled = ["LRCLIB", "NetEase"]
+    config.sourceOrder = ["NetEase", "LRCLIB"]; config.strictMatching = false
+    let settings = config
+    let store = LyricsStore(cache: .init(directory: directory), configuration: { settings },
+                            aliasResolver: TrackAliasResolver { _ in Data(#"{"results":[]}"#.utf8) }, searchBudget: .seconds(2)) { query, keyword, config, _ in
+        .init { stream in
+            let task = Task {
+                let source = config.enabled.first!
+                await probe.record(track: query, keyword: source + ":" + (keyword ?? "info"), limit: config.candidateLimit)
+                do {
+                    if source == "NetEase" { try await Task.sleep(for: .milliseconds(30)) }
+                    var doc = LyricsDocument(title: query.title, artist: query.artist, source: source, duration: 180,
+                                             lines: [.init(id: 0, time: 0, text: "夜空中的星")])
+                    // The better source only supplies its feature on round two.
+                    if source == "NetEase", keyword != nil {
+                        if wordOnly { doc.lines[0].words = [.init(text: "夜空", start: 0, end: 1), .init(text: "中的星", start: 1, end: 2)] }
+                        else { doc.lines[0].translation = "Stars in the night sky" }
+                    }
+                    stream.yield(doc); stream.finish()
+                } catch { stream.finish(throwing: error) }
+            }
+            stream.onTermination = { _ in task.cancel() }
+        }
+    }
+    var results: [LyricCandidate] = []
+    for try await candidate in store.lyrics(for: track, forceRefresh: true) { results.append(candidate) }
+    let best = try #require(results.max { $0.score < $1.score })
+    #expect(best.document.source == "NetEase" && !best.isProvisional)
+    #expect(best.document.hasWordTiming == wordOnly)
+    #expect(best.document.hasTranslation == !wordOnly)
+    let queries = await probe.queries
+    #expect(queries.filter { $0.hasPrefix("NetEase:") }.count == 2)
+    #expect(queries.filter { $0.hasPrefix("LRCLIB:") }.count == 2)
+}
+
 @Test func compactManualSearchBoundsEverySourceWhileCompleteSearchRetainsAllVersions() async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }

@@ -17,7 +17,7 @@ final class Preferences {
     var fontSize: Double { didSet { save("fontSize", fontSize) } }
     var translationFontSize: Double { didSet { save("translationFontSize", translationFontSize) } }
     var nextLineFontSize: Double { didSet { save("nextLineFontSize", nextLineFontSize) } }
-    var overlaySecondaryMode: String { didSet { save("overlaySecondaryMode", overlaySecondaryMode) } }
+    var overlaySecondaryMode: OverlaySecondaryMode { didSet { save("overlaySecondaryMode", overlaySecondaryMode.rawValue) } }
     var mainLyricFontSize: Double { didSet { save("mainLyricFontSize", mainLyricFontSize) } }
     var mainTranslationFontSize: Double { didSet { save("mainTranslationFontSize", mainTranslationFontSize) } }
     var showTranslation: Bool { didSet { save("showTranslation", showTranslation) } }
@@ -56,7 +56,7 @@ final class Preferences {
         fontSize = d.object(forKey: "fontSize") as? Double ?? 26
         translationFontSize = d.object(forKey: "translationFontSize") as? Double ?? 13
         nextLineFontSize = d.object(forKey: "nextLineFontSize") as? Double ?? 12
-        overlaySecondaryMode = d.string(forKey: "overlaySecondaryMode") ?? "translation"
+        overlaySecondaryMode = OverlaySecondaryMode(rawValue: d.string(forKey: "overlaySecondaryMode") ?? "translation") ?? .translation
         mainLyricFontSize = d.object(forKey: "mainLyricFontSize") as? Double ?? 30
         mainTranslationFontSize = d.object(forKey: "mainTranslationFontSize") as? Double ?? 14
         showTranslation = d.object(forKey: "showTranslation") as? Bool ?? true

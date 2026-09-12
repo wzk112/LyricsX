@@ -113,7 +113,7 @@ private struct MenuBarContent: View {
 private struct MenuBarLyricLabel: View {
     let model: AppModel
     var body: some View {
-        if let doc = model.session.document, !doc.isLikelyInstrumentalPlaceholder,
+        if let doc = model.session.document, !model.session.documentIsPlaceholder,
            let index = model.session.currentLineIndex, doc.lines.indices.contains(index) {
             Text(String(model.preferences.text(doc.lines[index].text).prefix(36)))
                 .help(model.preferences.text(doc.lines[index].text))

@@ -172,7 +172,7 @@ private final class StatusRecorder: @unchecked Sendable {
     let word = LyricCandidate(document: .init(title: "Other song", source: "QQMusic", lines: [.init(id: 0, time: 0, text: "Hi", words: [.init(text: "Hi", start: 0, end: 1)])]), score: 0)
     #expect(config.manualPrecedes(word, kugou))
     config.preferWordTiming = false
-    #expect(config.manualPrecedes(kugou, word))
+    #expect(config.manualPrecedes(word, kugou)) // Word timing is the bilingual preference's fallback.
 }
 
 private actor QQPageClient: HTTPClient {

@@ -2,119 +2,6 @@ import Foundation
 @preconcurrency import LyricsKit
 import LyricsXCore
 
-public struct SourceConfiguration: Sendable {
-    public static let defaultOrder = ["LRCLIB", "NetEase", "QQMusic", "Kugou", "Musixmatch"]
-    var candidateLimit = 40
-    public var enabled: Set<String> = ["LRCLIB", "NetEase", "QQMusic", "Kugou"]
-    public var sourceOrder: [String] = defaultOrder
-    public var preferBilingual = true
-    public var preferWordTiming = true
-    /// Keep the automatic result conservative by default. When disabled, a
-    /// synchronized result with an exact title can still be used when a player
-    /// or provider omits or formats artist and duration metadata differently.
-    public var strictMatching = true
-    public var musixmatchToken: String?
-    public var legacyDirectory: URL?
-    public init() {}
-
-    var selectionKey: String {
-        (Self.normalizedOrder(sourceOrder) + enabled.sorted() + [String(preferBilingual), String(preferWordTiming), String(strictMatching)]).joined(separator: "|")
-    }
-
-    func satisfiesAutomaticPreferences(_ document: LyricsDocument, for track: Track, aliases: [Track]) -> Bool {
-        guard document.isSynced, !document.isLikelyInstrumentalPlaceholder,
-              !preferWordTiming || document.hasWordTiming,
-              !preferBilingual || document.hasTranslation else { return false }
-        return ([track] + aliases).contains {
-            CandidateRanker.equivalentTitle(document.title, $0.title) && CandidateRanker.score(document, for: $0) >= 60
-        }
-    }
-
-    public static func normalizedOrder(_ values: [String]) -> [String] {
-        var seen: Set<String> = []
-        return (values + defaultOrder).filter { defaultOrder.contains($0) && seen.insert($0).inserted }
-    }
-
-    public func selectionScore(_ document: LyricsDocument, for track: Track) -> Double {
-        let match = CandidateRanker.score(document, for: track)
-        // Preferences cannot promote a rejected title, artist, or duration match.
-        guard match >= 60 else { return match }
-        let exactTitle = CandidateRanker.equivalentTitle(document.title, track.title)
-        let order = Self.normalizedOrder(sourceOrder)
-        let sourceBonus = order.firstIndex(of: document.source).map { Double(order.count - $0) * 10 } ?? 0
-        // Lexicographic priorities: title match > timing > bilingual > source >
-        // small quality differences. Keep network scores below local cache 999.
-        return 60 + (exactTitle ? 400 : 0) + (document.isSynced ? 200 : 0)
-            + (preferWordTiming && document.hasWordTiming ? 150 : 0)
-            + (preferBilingual && document.hasTranslation ? 100 : 0) + sourceBonus + match / 100
-    }
-
-    /// Providers occasionally publish a stale duration for an otherwise exact
-    /// title/artist match. This is only a fallback after every strict candidate
-    /// has failed; it prevents automatic search from showing an empty state while
-    /// preserving strict candidates as the normal path.
-    public func fallbackSelectionScore(_ document: LyricsDocument, for track: Track) -> Double? {
-        guard document.isSynced else { return nil }
-        let title = CandidateRanker.normalized(track.title)
-        let candidateTitle = CandidateRanker.normalized(document.title)
-        let artist = CandidateRanker.normalized(track.artist)
-        let candidateArtist = CandidateRanker.normalized(document.artist)
-        guard !title.isEmpty, title == candidateTitle,
-              artist.isEmpty || (!candidateArtist.isEmpty && (artist == candidateArtist || artist.contains(candidateArtist) || candidateArtist.contains(artist)))
-        else { return nil }
-        let order = Self.normalizedOrder(sourceOrder)
-        let sourceBonus = order.firstIndex(of: document.source).map { Double(order.count - $0) } ?? 0
-        return 50 + preferenceBonus(document) + sourceBonus / 100
-    }
-
-    /// A deliberately lower-priority fallback for sources with incomplete
-    /// metadata. Strict candidates and exact title/artist candidates above
-    /// always win; this path is only used after they have all failed.
-    public func relaxedSelectionScore(_ document: LyricsDocument, for track: Track) -> Double? {
-        guard !strictMatching, document.isSynced else { return nil }
-        let title = CandidateRanker.normalized(track.title)
-        let candidateTitle = CandidateRanker.normalized(document.title)
-        guard title.count >= 3, candidateTitle.count >= 3 else { return nil }
-        let exactTitle = CandidateRanker.equivalentTitle(document.title, track.title)
-        let compatibleTitle = exactTitle || title.contains(candidateTitle) || candidateTitle.contains(title)
-        guard compatibleTitle else { return nil }
-
-        let compatibleArtist = CandidateRanker.compatibleArtists(document.artist, for: track)
-        // A partial title must retain an artist match; an exact title is useful
-        // even when a provider has omitted the artist or reports a variant.
-        guard exactTitle || compatibleArtist else { return nil }
-        let order = Self.normalizedOrder(sourceOrder)
-        let sourceBonus = order.firstIndex(of: document.source).map { Double(order.count - $0) } ?? 0
-        return (exactTitle ? 40 : 30) + preferenceBonus(document) + (compatibleArtist ? 0.1 : 0) + sourceBonus / 100
-    }
-
-    private func preferenceBonus(_ document: LyricsDocument) -> Double {
-        (preferWordTiming && document.hasWordTiming ? 4 : 0) + (preferBilingual && document.hasTranslation ? 2 : 0)
-    }
-
-    func bestScore(_ document: LyricsDocument, for track: Track, aliases: [Track] = []) -> Double {
-        ([track] + aliases).map { query in
-            let strict = selectionScore(document, for: query)
-            if strict >= 60 { return strict }
-            return max(fallbackSelectionScore(document, for: query) ?? 0, relaxedSelectionScore(document, for: query) ?? 0)
-        }.max() ?? 0
-    }
-
-    /// Even a free-text query unrelated to the playing track must honor source
-    /// and feature preferences, rather than using network arrival order.
-    public func manualPrecedes(_ lhs: LyricCandidate, _ rhs: LyricCandidate) -> Bool {
-        if lhs.score != rhs.score { return lhs.score > rhs.score }
-        let left = preferenceBonus(lhs.document), right = preferenceBonus(rhs.document)
-        if left != right { return left > right }
-        let order = Self.normalizedOrder(sourceOrder)
-        let leftSource = order.firstIndex(of: lhs.document.source) ?? order.count
-        let rightSource = order.firstIndex(of: rhs.document.source) ?? order.count
-        if leftSource != rightSource { return leftSource < rightSource }
-        func key(_ doc: LyricsDocument) -> String { doc.title + "|" + doc.artist + "|" + doc.album + "|" + (doc.providerID ?? "") }
-        return key(lhs.document) < key(rhs.document)
-    }
-}
-
 public final class LyricsStore: LyricsRepository, Sendable {
     /// Download budgets per source/query. Manual search retains more versions;
     /// both paths use the same matching, aliases, and completion-order delivery.
@@ -129,14 +16,16 @@ public final class LyricsStore: LyricsRepository, Sendable {
     private let searchBackend: SearchBackend
     private let searchBudget: Duration
     private let firstResultDelay: Duration
+    private let fallbackGrace: Duration
     public init(cache: LyricsCache = LyricsCache(), configuration: @escaping @Sendable () -> SourceConfiguration = { .init() }) {
         self.cache = cache; self.configuration = configuration
-        self.aliasResolver = TrackAliasResolver(); self.searchBackend = Self.providerSearch; self.searchBudget = .seconds(24); self.firstResultDelay = .seconds(1)
+        self.aliasResolver = TrackAliasResolver(); self.searchBackend = Self.providerSearch; self.searchBudget = .seconds(24); self.firstResultDelay = .seconds(1); self.fallbackGrace = .seconds(8)
     }
     init(cache: LyricsCache, configuration: @escaping @Sendable () -> SourceConfiguration = { .init() },
-         aliasResolver: TrackAliasResolver, searchBudget: Duration = .seconds(24), firstResultDelay: Duration = .seconds(1), searchBackend: @escaping SearchBackend) {
+         aliasResolver: TrackAliasResolver, searchBudget: Duration = .seconds(24), firstResultDelay: Duration = .seconds(1),
+         fallbackGrace: Duration = .seconds(8), searchBackend: @escaping SearchBackend) {
         self.cache = cache; self.configuration = configuration; self.aliasResolver = aliasResolver
-        self.searchBackend = searchBackend; self.searchBudget = searchBudget; self.firstResultDelay = firstResultDelay
+        self.searchBackend = searchBackend; self.searchBudget = searchBudget; self.firstResultDelay = firstResultDelay; self.fallbackGrace = fallbackGrace
     }
     public func save(_ document: LyricsDocument, for track: Track) async throws { if track.playerID != "lyricsx.demo" { try await cache.save(document, for: track) } }
     public func lyrics(for track: Track, forceRefresh: Bool) -> AsyncThrowingStream<LyricCandidate, Error> {
@@ -190,7 +79,7 @@ public final class LyricsStore: LyricsRepository, Sendable {
             : (complete ? Self.completeManualCandidateLimit : Self.compactManualCandidateLimit)
         let configuration = config
         return AsyncThrowingStream { continuation in
-            let collector = SearchCollector(track: track, keyword: keyword, complete: complete, configuration: configuration,
+            let collector = SearchCollector(track: track, keyword: keyword, complete: complete, configuration: configuration, fallbackGrace: fallbackGrace,
                                             continuation: continuation, onSourceUpdate: onSourceUpdate)
             let task = Task {
                 let sessionConfig = URLSessionConfiguration.ephemeral
@@ -412,187 +301,4 @@ private final class HTTPTaskCancellation: @unchecked Sendable {
         lock.withLock { task = value; if cancelled { value.cancel() } }
     }
     func cancel() { lock.withLock { cancelled = true; task?.cancel() } }
-}
-
-private actor SearchCollector {
-    struct Key: Hashable {
-        var title: String; var artist: String; var source: String
-        var lines: [LyricLine]; var plain: String?; var instrumental: Bool
-        var providerID: String?; var album: String
-        init(_ document: LyricsDocument, preserveProviderID: Bool) {
-            title = document.title; artist = document.artist; source = document.source
-            providerID = preserveProviderID ? document.providerID : nil; album = document.album
-            lines = document.lines; plain = document.plainText; instrumental = document.isInstrumental
-        }
-    }
-    let track: Track
-    let configuration: SourceConfiguration
-    let continuation: AsyncThrowingStream<LyricCandidate, Error>.Continuation
-    var aliases: [Track] = []
-    var candidates: [Key: LyricCandidate] = [:]
-    var visibleKeys: Set<Key> = []
-    let onSourceUpdate: @Sendable (SourceSearchStatus) -> Void
-    var sourceErrors: [String: String] = [:]
-    var activeSources: Set<String> = []
-    struct Query: Sendable {
-        let track: Track
-        let keyword: String?
-        var key: String {
-            keyword.map { "q:" + CandidateRanker.normalized($0) }
-                ?? "i:" + CandidateRanker.normalized(track.title) + "|" + CandidateRanker.normalized(track.artist)
-        }
-    }
-    var queues: [String: [Query]] = [:]
-    var queryKeys: [String: Set<String>] = [:]
-    var waiters: [String: CheckedContinuation<Query?, Never>] = [:]
-    var catalogDone = false
-    let useTrackHints: Bool
-    let isAutomatic: Bool
-    let completeManualSearch: Bool
-    var satisfiedSources: Set<String> = []
-    var completedQueries: [String: Int] = [:]
-    var finished = false
-    var successes = 0
-    var failures = 0
-    var allFailed: Bool { candidates.isEmpty && successes == 0 && failures > 0 }
-    init(track: Track, keyword: String?, complete: Bool, configuration: SourceConfiguration, continuation: AsyncThrowingStream<LyricCandidate, Error>.Continuation, onSourceUpdate: @escaping @Sendable (SourceSearchStatus) -> Void) {
-        self.onSourceUpdate = onSourceUpdate
-        self.useTrackHints = LyricsStore.usesTrackHints(track: track, keyword: keyword)
-        self.isAutomatic = keyword == nil
-        self.completeManualSearch = complete
-        self.track = track; self.configuration = configuration; self.continuation = continuation
-        let queries = LyricsStore.queryKeywords(track: track, keyword: keyword, complete: complete || keyword == nil).map { Query(track: track, keyword: $0) }
-        for source in configuration.availableSources {
-            queues[source] = queries
-            queryKeys[source] = Set(queries.map(\.key))
-        }
-    }
-    func add(_ document: LyricsDocument) -> [Track] {
-        guard !finished else { return [] }
-        guard document.isSynced || document.isInstrumental || document.plainText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else { return [] }
-        var discovered: [Track] = []
-        if useTrackHints {
-            discovered = addAliases(ArtistAliasEvidence.aliases(in: document, for: track))
-            discovered += addAliases(ArtistAliasEvidence.searchTitles(in: document, for: track, aliases: aliases))
-        }
-        guard !finished else { return discovered }
-        let key = Key(document, preserveProviderID: isAutomatic || completeManualSearch)
-        guard candidates[key] == nil else { return discovered }
-        let candidate = LyricCandidate(document: document, score: configuration.bestScore(document, for: track, aliases: aliases))
-        candidates[key] = candidate
-        publish(candidate, key: key)
-        updateSatisfiedSources()
-        updateCompactLimit(for: document.source)
-        if !finished { report(document.source) }
-        return discovered
-    }
-    @discardableResult func addAliases(_ values: [Track]) -> [Track] {
-        guard !finished else { return [] }
-        var added: [Track] = []
-        let aliasLimit = isAutomatic || completeManualSearch ? 4 : 2
-        for value in values where aliases.count < aliasLimit {
-            guard !aliases.contains(where: { CandidateRanker.normalized($0.title) == CandidateRanker.normalized(value.title)
-                && CandidateRanker.normalized($0.artist) == CandidateRanker.normalized(value.artist) }) else { continue }
-            aliases.append(value); added.append(value)
-            for source in configuration.availableSources {
-                if satisfiedSources.contains(source) { continue }
-                let queries = LyricsStore.queryKeywords(track: value, keyword: nil, complete: isAutomatic || completeManualSearch).map { Query(track: value, keyword: $0) }
-                    .filter { queryKeys[source, default: []].insert($0.key).inserted }
-                queues[source, default: []].insert(contentsOf: queries, at: 0)
-                if !queries.isEmpty, let waiter = waiters.removeValue(forKey: source) {
-                    activeSources.insert(source)
-                    waiter.resume(returning: queues[source]!.removeFirst())
-                }
-            }
-        }
-        guard !added.isEmpty else { return [] }
-        for (key, var candidate) in candidates {
-            let score = configuration.bestScore(candidate.document, for: track, aliases: aliases)
-            if score > candidate.score {
-                candidate.score = score; candidates[key] = candidate; publish(candidate, key: key)
-            }
-        }
-        updateSatisfiedSources()
-        for source in configuration.availableSources { updateCompactLimit(for: source) }
-        return added
-    }
-    private func updateSatisfiedSources() {
-        guard isAutomatic else { return }
-        for candidate in candidates.values where !satisfiedSources.contains(candidate.document.source) {
-            if configuration.satisfiesAutomaticPreferences(candidate.document, for: track, aliases: aliases) {
-                satisfiedSources.insert(candidate.document.source)
-                queues[candidate.document.source] = []
-            }
-        }
-        // No other enabled source can outrank an exact, fully preferred result
-        // from the first source. Do not spend the rest of the budget on it.
-        if let first = configuration.availableSources.first, satisfiedSources.contains(first) {
-            finish(timedOut: false)
-            continuation.finish()
-        }
-    }
-    private func updateCompactLimit(for source: String) {
-        guard !isAutomatic, !completeManualSearch else { return }
-        let visibleCount = visibleKeys.lazy.filter({ self.candidates[$0]?.document.source == source }).count
-        if visibleCount >= LyricsStore.compactManualResultsPerSource || (catalogDone && completedQueries[source, default: 0] >= 2) {
-            satisfiedSources.insert(source)
-            queues[source] = []
-        }
-    }
-    private func publish(_ candidate: LyricCandidate, key: Key) {
-        // For the current track, compact search keeps off-target same-name songs
-        // available for later alias rescoring without flooding the visible list.
-        let visible = isAutomatic || completeManualSearch || !useTrackHints || candidate.score >= 60
-        guard visible else { return }
-        visibleKeys.insert(key)
-        continuation.yield(candidate)
-    }
-    func sourceShouldStop(_ source: String) -> Bool { satisfiedSources.contains(source) }
-    func begin() { for source in configuration.availableSources { report(source) } }
-    func completed(source: String, error: String?) {
-        guard !finished else { return }
-        activeSources.remove(source)
-        completedQueries[source, default: 0] += 1
-        if let error { failures += 1; sourceErrors[source] = error }
-        else { successes += 1 }
-        updateCompactLimit(for: source)
-        report(source)
-    }
-    func catalogFinished() {
-        catalogDone = true
-        for source in configuration.availableSources { updateCompactLimit(for: source) }
-        finishWaitingIfDrained()
-    }
-    func nextQuery(source: String) async -> Query? {
-        guard !finished, !Task.isCancelled else { return nil }
-        if satisfiedSources.contains(source) { finishWaitingIfDrained(); return nil }
-        if queues[source]?.isEmpty == false {
-            activeSources.insert(source)
-            return queues[source]!.removeFirst()
-        }
-        return await withCheckedContinuation { waiter in
-            waiters[source] = waiter
-            finishWaitingIfDrained()
-        }
-    }
-    private func finishWaitingIfDrained() {
-        guard catalogDone, activeSources.isEmpty, queues.values.allSatisfy(\.isEmpty) else { return }
-        let pending = waiters.values; waiters = [:]
-        for waiter in pending { waiter.resume(returning: nil) }
-    }
-    func cancel() {
-        finished = true
-        let pending = waiters.values; waiters = [:]
-        for waiter in pending { waiter.resume(returning: nil) }
-    }
-    func finish(timedOut: Bool) {
-        guard !finished else { return }
-        for source in configuration.availableSources { report(source, finished: true, timedOut: timedOut && activeSources.contains(source)) }
-        cancel()
-    }
-    private func report(_ source: String, finished: Bool = false, timedOut: Bool = false) {
-        let count = visibleKeys.lazy.filter { self.candidates[$0]?.document.source == source }.count
-        onSourceUpdate(.init(source: source, count: count, isSearching: !finished,
-                             issue: sourceErrors[source] ?? (timedOut ? "搜索超时，已保留结果" : nil)))
-    }
 }

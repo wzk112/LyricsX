@@ -8,6 +8,7 @@ struct SearchView: View {
     @State private var query = ""
     @State private var previousQuery = ""
     @State private var previousCompleteSearch = false
+    @State private var previousConfigurationKey = ""
     @State private var completeSearch = false
     @State private var results: [LyricCandidate] = []
     @State private var searching = false
@@ -91,12 +92,14 @@ struct SearchView: View {
         let id = UUID(); requestID = id; searching = true; error = nil; sourceStatuses = []
         // Keep the last completed versions visible while retrying a source.
         // A transport failure must not make known results disappear.
-        if trackID != model.session.track?.id || previousQuery != query || previousCompleteSearch != completeSearch { results = [] }
+        let configuration = model.preferences.sourceConfigurationReader.read()
+        if trackID != model.session.track?.id || previousQuery != query || previousCompleteSearch != completeSearch
+            || previousConfigurationKey != configuration.selectionKey { results = [] }
         retainedPreviousResults = !results.isEmpty
         previousQuery = query
         previousCompleteSearch = completeSearch
+        previousConfigurationKey = configuration.selectionKey
         let track = model.session.track ?? Track(playerID: "search", playerName: "搜索", title: query)
-        let configuration = model.preferences.sourceConfigurationReader.read()
         trackID = model.session.track?.id
         searchTask = Task {
             do {
@@ -113,7 +116,7 @@ struct SearchView: View {
                     if let index = results.firstIndex(where: { $0.id == result.id || Self.sameVersion($0.document, result.document) }) {
                         results[index] = result
                     } else { results.append(result) }
-                    results.sort(by: configuration.manualPrecedes)
+                    results = configuration.orderedManualResults(results, complete: completeSearch)
                 }
             } catch { if !Task.isCancelled, requestID == id { self.error = error.localizedDescription } }
             if requestID == id { searching = false; deadline?.cancel() }

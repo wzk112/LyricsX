@@ -131,11 +131,10 @@ struct PreferencesView: View {
             }
             settingsGroup("辅助文字") {
                 Picker("显示内容", selection: Bindable(prefs).overlaySecondaryMode) {
-                    Text("翻译").tag("translation")
-                    Text("下一句").tag("next")
-                    Text("翻译和下一句").tag("both")
-                    Text("关闭").tag("none")
+                    ForEach(OverlaySecondaryMode.allCases) { Text($0.title).tag($0) }
                 }
+                Text("“翻译或下一句”优先显示本句翻译，没有可用翻译时显示下一句；“仅翻译”不会回退。")
+                    .font(.caption).foregroundStyle(.secondary)
                 sliderRow("翻译字号", value: Bindable(prefs).translationFontSize, range: 10...24, step: 1, suffix: "pt")
                 sliderRow("下一句字号", value: Bindable(prefs).nextLineFontSize, range: 10...24, step: 1, suffix: "pt")
             }
@@ -168,7 +167,7 @@ struct PreferencesView: View {
                 Toggle("双语优先", isOn: Bindable(prefs).preferBilingual)
                 Toggle("逐字优先", isOn: Bindable(prefs).preferWordTiming)
                 Toggle("严格匹配", isOn: Bindable(prefs).strictLyricsMatching)
-                Text("先确认歌曲，再依次考虑时间轴、逐字、双语和来源顺序；开启的偏好优先于来源顺序。歌名和歌手匹配时，歌词提前结束不会被排除。关闭严格匹配后也接受歌手信息不完整的同名同步歌词。")
+                Text("严格匹配开启时，准确标题优先；关闭后，可信的标题变体按功能偏好、来源顺序排序。两项偏好都开启时逐字优先，其次双语；只开一项时先满足该项，没有时回退到另一项。两项都关闭则按来源排序。歌词提前结束不会排除准确的歌名、歌手匹配。")
                     .font(.caption).foregroundStyle(.secondary)
             }
             settingsGroup("来源优先级") {

@@ -50,7 +50,7 @@ final class AppModel {
     }
     var overlayUsesCompactPresentation: Bool {
         guard let document = session.document else { return true }
-        return !document.isSynced || document.isLikelyInstrumentalPlaceholder
+        return !document.isSynced || session.documentIsPlaceholder
     }
 
     func start() {
@@ -71,7 +71,7 @@ final class AppModel {
                 guard let self else { return }
                 self.session.tick()
                 let visible = self.mainWindowVisible || self.overlay?.isRenderingLyrics == true
-                let wordTimed = self.session.document?.hasWordTiming == true && !self.preferences.reduceMotion
+                let wordTimed = self.session.documentHasWordTiming && !self.preferences.reduceMotion
                 let interval = !self.session.isPlaying ? 500 : !visible ? 250 : wordTimed ? 50 : 100
                 do { try await Task.sleep(for: .milliseconds(interval)) } catch { return }
             }

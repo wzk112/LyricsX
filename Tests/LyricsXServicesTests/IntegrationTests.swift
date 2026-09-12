@@ -3,6 +3,33 @@ import Testing
 import LyricsXCore
 @testable import LyricsXServices
 
+@Test(.enabled(if: ProcessInfo.processInfo.environment["LYRICSX_LIVE_PRIORITY"] == "1"))
+func liveAutomaticPriorityAndFeatureFallback() async throws {
+    let tracks = [
+        Track(playerID: "diagnostic", playerName: "", title: "稻香", artist: "周杰伦", duration: 223),
+        Track(playerID: "diagnostic", playerName: "", title: "In My Feelings", artist: "Nerissa Ravencroft", duration: 207.84),
+        Track(playerID: "diagnostic", playerName: "", title: "雪降り ~ 雪が降っている ~ (feat. 結月ゆかり) [Full Ver.]", artist: "AiSS & NE1516Hz", duration: 222)
+    ]
+    for track in tracks {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = LyricsStore(cache: .init(directory: directory), configuration: {
+            var config = SourceConfiguration(); config.strictMatching = false
+            config.sourceOrder = ["NetEase", "QQMusic", "Kugou", "LRCLIB", "Musixmatch"]
+            return config
+        })
+        let started = ContinuousClock.now
+        var values: [LyricCandidate] = []
+        for try await value in store.lyrics(for: track, forceRefresh: true) { values.append(value) }
+        let maximum = values.map(\.score).max()
+        let best = try #require(values.last { $0.score == maximum })
+        print("PRIORITY_LIVE title=\(track.title) source=\(best.document.source) word=\(best.document.hasWordTiming) bilingual=\(best.document.hasTranslation) provisional=\(best.isProvisional) elapsed=\(started.duration(to: .now)) candidates=\(values.count)")
+        #expect(best.score >= 60)
+        #expect(best.document.source != "LRCLIB")
+        #expect(!best.isProvisional)
+    }
+}
+
 @Test(.enabled(if: ProcessInfo.processInfo.environment["LYRICSX_DIAG_TITLE"] != nil))
 func diagnoseSearchCandidates() async throws {
     let env = ProcessInfo.processInfo.environment

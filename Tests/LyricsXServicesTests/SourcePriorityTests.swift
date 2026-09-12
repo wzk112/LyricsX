@@ -19,9 +19,49 @@ private func version(_ source: String, translation: String? = nil) -> LyricsDocu
     let bilingual = version("NetEase", translation: "你好")
     #expect(config.selectionScore(bilingual, for: rankingTrack) > config.selectionScore(plain, for: rankingTrack))
     config.preferBilingual = false
+    config.preferWordTiming = false
     #expect(config.selectionScore(plain, for: rankingTrack) > config.selectionScore(bilingual, for: rankingTrack))
     config.sourceOrder = ["NetEase", "LRCLIB"]
     #expect(config.selectionScore(bilingual, for: rankingTrack) > config.selectionScore(plain, for: rankingTrack))
+}
+
+@Test func relaxedRankingDoesNotLetExactLRCLIBTitleOverrideTrustedSourceOrFeatures() {
+    let track = Track(playerID: "test", playerName: "", title: "夜空中的星", artist: "Singer", duration: 180)
+    let exact = LyricsDocument(title: track.title, artist: track.artist, source: "LRCLIB", duration: 180,
+                               lines: [.init(id: 0, time: 0, text: "夜空")])
+    var variant = exact; variant.title += "（电影主题曲）"; variant.source = "NetEase"
+    var config = SourceConfiguration(); config.sourceOrder = ["NetEase", "LRCLIB"]
+    #expect(config.selectionScore(exact, for: track) > config.selectionScore(variant, for: track))
+    config.strictMatching = false
+    #expect(config.selectionScore(variant, for: track) > config.selectionScore(exact, for: track))
+    variant.lines[0].translation = "Night sky"
+    #expect(config.selectionScore(variant, for: track) > config.selectionScore(exact, for: track))
+    // Explicitly incompatible metadata is still rejected, even with features.
+    variant.artist = "Unrelated"
+    #expect(config.selectionScore(variant, for: track) == 0)
+}
+
+@Test func preferredFeatureFallsBackToTheOtherBeforeSourceOrder() {
+    let plain = version("LRCLIB")
+    let bilingual = version("NetEase", translation: "你好")
+    var word = version("QQMusic")
+    word.lines[0].words = [.init(text: "Hel", start: 1, end: 1.5), .init(text: "lo", start: 1.5, end: 2)]
+    var config = SourceConfiguration(); config.preferBilingual = false
+    #expect(config.selectionScore(word, for: rankingTrack) > config.selectionScore(bilingual, for: rankingTrack))
+    #expect(config.selectionScore(bilingual, for: rankingTrack) > config.selectionScore(plain, for: rankingTrack))
+    config.preferBilingual = true; config.preferWordTiming = false
+    #expect(config.selectionScore(bilingual, for: rankingTrack) > config.selectionScore(word, for: rankingTrack))
+    #expect(config.selectionScore(word, for: rankingTrack) > config.selectionScore(plain, for: rankingTrack))
+    config.preferBilingual = false
+    #expect(config.selectionScore(plain, for: rankingTrack) > config.selectionScore(word, for: rankingTrack))
+}
+
+@Test func relaxedArtistVariantWithoutDurationStillUsesPreferences() {
+    let track = Track(playerID: "test", playerName: "", title: "Northern Sky", artist: "Alice & Bob")
+    let exact = LyricsDocument(title: track.title, artist: track.artist, source: "LRCLIB", lines: [.init(id: 0, time: 0, text: "Hello")])
+    var variant = exact; variant.title += " (Theme)"; variant.artist = "Alice"; variant.source = "NetEase"
+    var config = SourceConfiguration(); config.strictMatching = false; config.sourceOrder = ["NetEase", "LRCLIB"]
+    #expect(config.selectionScore(variant, for: track) > config.selectionScore(exact, for: track))
 }
 
 @Test func wordTimingPreferenceChangesTheWinner() {
@@ -80,6 +120,22 @@ private func version(_ source: String, translation: String? = nil) -> LyricsDocu
     #expect(!version("NetEase", translation: " \n ").hasTranslation)
     #expect(!version("NetEase", translation: "Hello").hasTranslation)
     #expect(version("NetEase", translation: "你好").hasTranslation)
+}
+
+@Test func retryMergeKeepsCompactLimitsAndBestFeaturesPerSource() {
+    let config = SourceConfiguration()
+    var values: [LyricCandidate] = []
+    for source in ["LRCLIB", "NetEase"] {
+        for id in 0..<24 {
+            var doc = version(source, translation: id >= 12 ? "你好" : nil)
+            doc.providerID = String(id)
+            values.append(.init(document: doc, score: config.selectionScore(doc, for: rankingTrack)))
+        }
+    }
+    let compact = config.orderedManualResults(values, complete: false)
+    #expect(compact.count == 24 && compact.allSatisfy { $0.document.hasTranslation })
+    #expect(compact.filter { $0.document.source == "NetEase" }.count == 12)
+    #expect(config.orderedManualResults(values, complete: true).count == 48)
 }
 
 private struct RankedFixtureRepository: LyricsRepository {

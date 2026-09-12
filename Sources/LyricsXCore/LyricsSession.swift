@@ -4,7 +4,14 @@ import Observation
 @Observable @MainActor
 public final class LyricsSession {
     public private(set) var track: Track?
-    public private(set) var document: LyricsDocument?
+    public private(set) var document: LyricsDocument? {
+        didSet {
+            documentHasWordTiming = document?.hasWordTiming == true
+            documentIsPlaceholder = document?.isLikelyInstrumentalPlaceholder == true
+        }
+    }
+    public private(set) var documentHasWordTiming = false
+    public private(set) var documentIsPlaceholder = false
     public private(set) var phase: LyricsPhase = .idle
     public private(set) var position = 0.0
     public private(set) var isPlaying = false

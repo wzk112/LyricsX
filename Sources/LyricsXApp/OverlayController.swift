@@ -180,13 +180,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
         if panel.ignoresMouseEvents != prefs.overlayClickThrough { panel.ignoresMouseEvents = prefs.overlayClickThrough }
         setControlsDetached(prefs.overlayClickThrough)
         let width = min(1000, max(320, prefs.overlayWidth))
-        let secondaryHeight: Double
-        switch prefs.overlaySecondaryMode {
-        case "none": secondaryHeight = 0
-        case "next": secondaryHeight = prefs.nextLineFontSize * 1.4 + prefs.overlayPrimarySpacing
-        case "both": secondaryHeight = (prefs.translationFontSize + prefs.nextLineFontSize) * 1.4 + prefs.overlayPrimarySpacing + prefs.overlaySecondarySpacing
-        default: secondaryHeight = prefs.translationFontSize * 1.4 + prefs.overlayPrimarySpacing
-        }
+        let secondaryHeight = prefs.overlaySecondaryMode.reservedHeight(translationSize: prefs.translationFontSize,
+            nextSize: prefs.nextLineFontSize, primarySpacing: prefs.overlayPrimarySpacing, secondarySpacing: prefs.overlaySecondarySpacing)
         let size = model.overlayUsesCompactPresentation
             ? NSSize(width: min(width, 400), height: 108)
             : NSSize(width: width, height: max(110, prefs.fontSize * 2.3 + 46 + secondaryHeight))
@@ -329,7 +324,7 @@ struct OverlayView: View {
         return doc.lines[index]
     }
     private var translation: String? {
-        guard model.preferences.showTranslation, let value = line?.translation else { return nil }
+        guard model.preferences.showTranslation, line?.hasTranslation == true, let value = line?.translation else { return nil }
         return model.preferences.text(value)
     }
     private var nextLine: String? {
@@ -340,6 +335,7 @@ struct OverlayView: View {
         "\(model.session.track?.id ?? "idle")-\(model.session.document?.id.description ?? placeholder)-\(line?.id ?? -1)"
     }
     var body: some View {
+        let secondary = model.preferences.overlaySecondaryMode.content(translation: translation, next: nextLine)
         VStack(spacing: 0) {
             if model.overlayUsesCompactPresentation {
                 // Reserve the same top strip for controls in both layouts.
@@ -380,16 +376,16 @@ struct OverlayView: View {
                             .font(.system(size: model.preferences.fontSize, weight: .semibold)).tracking(-0.4)
                             .multilineTextAlignment(.center).lineLimit(2).minimumScaleFactor(0.6)
                     } else { Text(placeholder) }
-                if ["translation", "both"].contains(model.preferences.overlaySecondaryMode), let translation {
+                if let translation = secondary.translation {
                     Text(translation).font(.system(size: model.preferences.translationFontSize, weight: .medium))
                         .foregroundStyle(.white.opacity(0.95)).lineLimit(1).minimumScaleFactor(0.75)
                         .shadow(color: .black.opacity(0.9), radius: 2, y: 1).padding(.top, model.preferences.overlayPrimarySpacing)
                 }
-                if ["next", "both"].contains(model.preferences.overlaySecondaryMode), let nextLine {
+                if let nextLine = secondary.next {
                     Text(nextLine).font(.system(size: model.preferences.nextLineFontSize, weight: .medium))
                         .foregroundStyle(.white.opacity(0.85)).lineLimit(1).minimumScaleFactor(0.75)
                         .shadow(color: .black.opacity(0.9), radius: 2, y: 1)
-                        .padding(.top, model.preferences.overlaySecondaryMode == "both" && translation != nil ? model.preferences.overlaySecondarySpacing : model.preferences.overlayPrimarySpacing)
+                        .padding(.top, secondary.translation != nil ? model.preferences.overlaySecondarySpacing : model.preferences.overlayPrimarySpacing)
                 }
                   }.frame(maxWidth: .infinity)
                     .id(lyricIdentity)
