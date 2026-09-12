@@ -1,6 +1,8 @@
 import AppKit
 import Foundation
 import Testing
+import SwiftUI
+import Darwin
 import LyricsXCore
 @testable import LyricsXApp
 
@@ -245,14 +247,27 @@ private let overlayLyrics = LyricsDocument(title: "Overlay Song", artist: "Artis
         try compiler.run(); compiler.waitUntilExit()
         try #require(compiler.terminationStatus == 0)
         let examples = OverlayAppearance.allCases.flatMap { appearance in
-            ["light", "dark", "color"].map { (appearance, $0, 0.6) }
-                + [0.2, 0.8].flatMap { transparency in ["light", "text"].map { (appearance, $0, transparency) } }
+            ["light", "dark", "color"].map { (appearance, $0, 0.6, appearance.defaultFrost) }
+                + [0.2, 0.8].flatMap { transparency in ["light", "text"].map { (appearance, $0, transparency, appearance.defaultFrost) } }
+                + [0.0, 1.0].map { (appearance, "text", 0.8, $0) }
         }
         for hdr in [false, true] {
             prefs.lyricHDR = hdr
-            for (appearance, surface, transparency) in examples {
+            for (appearance, surface, transparency, frost) in examples {
                 prefs.overlayAppearance = appearance
                 prefs.overlayTransparency = transparency
+                prefs.overlayFrostAmount = frost
+                // Reproduce a compact waiting card expanding into timed lyrics.
+                // Fixed-size material previews miss stale content-mask bounds.
+                let top = overlay.panel.frame.maxY
+                var resized = overlay.panel.frame
+                resized.size.height = 104
+                resized.origin.y = top - resized.height
+                overlay.panel.setFrame(resized, display: true)
+                try await Task.sleep(for: .milliseconds(30))
+                resized.size.height = 196
+                resized.origin.y = top - resized.height
+                overlay.panel.setFrame(resized, display: true)
                 let dark = surface == "dark"
                 overlay.panel.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
                 overlay.controlPanel.appearance = overlay.panel.appearance
@@ -280,7 +295,8 @@ private let overlayLyrics = LyricsDocument(title: "Overlay Song", artist: "Artis
                     try await Task.sleep(for: .milliseconds(500))
                     let window = detached ? overlay.controlPanel : overlay.panel
                     let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-                    let name = "controls-\(appearance.rawValue)-\(surface)-\(Int((transparency * 100).rounded()))-\(hdr ? "hdr" : "sdr")-\(detached ? "detached" : "inline").png"
+                    let frostSuffix = frost == appearance.defaultFrost ? "" : "-frost-\(Int(frost * 100))"
+                    let name = "controls-\(appearance.rawValue)-\(surface)-\(Int((transparency * 100).rounded()))-\(hdr ? "hdr" : "sdr")-\(detached ? "detached" : "inline")\(frostSuffix).png"
                     // Capture different processes together, including real EDR
                     // compositing. Isolated window captures can replace glass with grey.
                     let frame = window.frame
@@ -294,8 +310,8 @@ private let overlayLyrics = LyricsDocument(title: "Overlay Song", artist: "Artis
         }
         // Measure fine background detail away from the foreground lyrics. A
         // successful screenshot alone cannot detect an opaque grey fallback.
-        func backgroundDetail(_ style: String, _ range: String) throws -> Double {
-            let path = directory + "/controls-\(style)-text-80-\(range)-inline.png"
+        func backgroundDetail(_ style: String, _ range: String, frostSuffix: String = "") throws -> Double {
+            let path = directory + "/controls-\(style)-text-80-\(range)-inline\(frostSuffix).png"
             let bitmap = try #require(NSBitmapImageRep(data: Data(contentsOf: URL(fileURLWithPath: path))))
             let scale = Double(bitmap.pixelsWide) / overlay.panel.frame.width
             var energy = 0.0, samples = 0.0
@@ -313,8 +329,115 @@ private let overlayLyrics = LyricsDocument(title: "Overlay Song", artist: "Artis
             let clear = try backgroundDetail("glass", range)
             let frosted = try backgroundDetail("frosted", range)
             #expect(clear > 0.015)
-            #expect(clear > frosted * 3 + 0.005)
+            // Reading glass now intentionally lets a little detail through,
+            // while still softening it substantially more than clear glass.
+            #expect(clear > frosted * 2)
+            for style in OverlayAppearance.allCases {
+                let low = try backgroundDetail(style.rawValue, range, frostSuffix: "-frost-0")
+                let high = try backgroundDetail(style.rawValue, range, frostSuffix: "-frost-100")
+                #expect(low > high * 1.5)
+            }
+            // A mask left at the compact height creates a horizontal tint seam
+            // after expansion. Sample the blank area between header and lyrics.
+            let path = directory + "/controls-glass-light-20-\(range)-inline.png"
+            let bitmap = try #require(NSBitmapImageRep(data: Data(contentsOf: URL(fileURLWithPath: path))))
+            let scale = Double(bitmap.pixelsWide) / overlay.panel.frame.width
+            let x = Int(82 * scale)
+            var largestStep = 0.0
+            for y in Int(50 * scale)..<Int(170 * scale) {
+                let first = try #require(bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+                let next = try #require(bitmap.colorAt(x: x, y: y + 1)?.usingColorSpace(.deviceRGB))
+                largestStep = max(largestStep, abs(first.redComponent - next.redComponent))
+            }
+            #expect(largestStep < 0.04)
         }
+    }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["LYRICSX_PERFORMANCE_QA"] == "1"))
+    func animatedSurfacesStopWorkWhenHiddenAndKeepNativeCadence() async throws {
+        _ = NSApplication.shared
+        NSApp.finishLaunching()
+        let suite = "LyricsXTests-" + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let prefs = Preferences(defaults: defaults)
+        prefs.overlayVisible = true; prefs.hideWhenPaused = false
+        prefs.overlayLocked = true; prefs.hideOverlayOnHover = true
+        prefs.overlaySecondaryMode = .both; prefs.lyricHDR = true
+        let model = AppModel(repository: EmptyRepository(), preferences: prefs)
+        let document = LyricsDocument(title: "Performance fixture", lines: (0..<12).map { index in
+            let time = Double(index) * 2
+            return LyricLine(id: index, time: time, text: "Light moves through the glass",
+                translation: index.isMultiple(of: 2) ? "光线穿过玻璃" : "保持清晰与流畅",
+                words: [.init(text: "Light", start: time, end: time + 1.2),
+                        .init(text: "moves through the glass", start: time + 1.2, end: time + 2)])
+        })
+        model.session.accept(.init(track: overlayTrack, position: 0, isPlaying: true), shouldSearch: false)
+        model.session.use(document, persist: false)
+        model.mainWindowVisible = true
+        var pointer = NSPoint(x: -10_000, y: -10_000)
+        let overlay = OverlayController(model: model, frameAutosaveName: nil, pointerLocation: { pointer })
+        let main = NSPanel(contentRect: .init(x: 50, y: 250, width: 760, height: 480),
+            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        main.isReleasedWhenClosed = false
+        main.contentView = NSHostingView(rootView: NowPlayingView(model: model).hdrDisplayScope(requested: true))
+        main.orderFrontRegardless()
+        overlay.panel.orderFrontRegardless()
+        let playbackStart = ProcessInfo.processInfo.systemUptime
+        let ticker = PlaybackTicker {
+            let now = ProcessInfo.processInfo.systemUptime
+            model.session.accept(.init(track: overlayTrack, position: now - playbackStart, isPlaying: true), now: now)
+            model.updateMainLyricSelection()
+            return LyricTickCadence.milliseconds(playing: true,
+                visible: model.mainWindowVisible || overlay.needsPreciseLyricTicks,
+                document: document, position: model.session.position)
+        }
+        ticker.start()
+        defer { ticker.stop(); overlay.stop(); main.close(); model.stop() }
+        func frames(in view: NSView) -> [LyricFrameView] {
+            (view as? LyricFrameView).map { [$0] } ?? view.subviews.flatMap { frames(in: $0) }
+        }
+        // Swift Testing has no NSApplication.run(). Drain its native event queue
+        // so WindowServer occlusion events reach the real window observers.
+        func render(for seconds: Double) async throws {
+            let end = ProcessInfo.processInfo.systemUptime + seconds
+            while ProcessInfo.processInfo.systemUptime < end {
+                if let event = NSApp.nextEvent(matching: .any, until: Date().addingTimeInterval(0.01), inMode: .default, dequeue: true) {
+                    NSApp.sendEvent(event)
+                }
+                try await Task.sleep(for: .milliseconds(5))
+            }
+        }
+        func cpuTime() -> Double {
+            var usage = rusage()
+            getrusage(RUSAGE_SELF, &usage)
+            return Double(usage.ru_utime.tv_sec + usage.ru_stime.tv_sec)
+                + Double(usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1_000_000
+        }
+        let begin = cpuTime()
+        try await render(for: 3)
+        let bothCPU = (cpuTime() - begin) / 3 * 100
+        let active = frames(in: overlay.lyricHostingView).filter(\.deliveringFrames)
+        print("Overlay render probe: visible=\(overlay.panel.isVisible), exposed=\(overlay.panel.occlusionState.contains(.visible)), lyric=\(overlay.isRenderingLyrics), playing=\(model.session.isPlaying), sources=\(frames(in: overlay.lyricHostingView).map { [$0.running, $0.deliveringFrames] })")
+        #expect(!active.isEmpty)
+        #expect(active.allSatisfy { $0.requestedFrameRate == overlay.panel.screen?.maximumFramesPerSecond })
+        main.orderOut(nil); model.mainWindowVisible = false
+        let overlayBegin = cpuTime()
+        try await render(for: 3)
+        let overlayCPU = (cpuTime() - overlayBegin) / 3 * 100
+        #expect(!frames(in: overlay.lyricHostingView).filter(\.deliveringFrames).isEmpty)
+        // Holding the same synthetic pointer position avoids a real mouse move.
+        pointer = NSPoint(x: overlay.panel.frame.midX, y: overlay.panel.frame.midY)
+        overlay.refreshAppearance()
+        try await render(for: 0.25)
+        #expect(!frames(in: overlay.lyricHostingView).contains { $0.deliveringFrames })
+        prefs.overlayVisible = false
+        try await render(for: 0.25)
+        let hiddenBegin = cpuTime()
+        try await render(for: 1)
+        #expect(!frames(in: overlay.lyricHostingView).contains { $0.deliveringFrames })
+        print(String(format: "Isolated render CPU: both %.1f%%; overlay %.1f%%; hidden %.1f%%; requested %d Hz",
+            bothCPU, overlayCPU, (cpuTime() - hiddenBegin) * 100, overlay.panel.screen?.maximumFramesPerSecond ?? 0))
     }
 
     @Test func repeatedArtworkSamplesKeepTheDecodedImageAndTrackChangeClearsIt() throws {
@@ -369,9 +492,11 @@ private let overlayLyrics = LyricsDocument(title: "Overlay Song", artist: "Artis
             #expect(migrated.overlayAppearance == expectedStyle)
             #expect(abs(migrated.overlayTransparency - 0.72) < 0.001)
             migrated.overlayTransparency = 0.42
+            migrated.overlayFrostAmount = 0.24
             let restored = Preferences(defaults: defaults)
             #expect(restored.overlayAppearance == expectedStyle)
             #expect(restored.overlayTransparency == 0.42)
+            #expect(restored.overlayFrostAmount == 0.24)
         }
         defaults.set(0.95, forKey: "overlayTransparency")
         #expect(Preferences(defaults: defaults).overlayTransparency == 0.8)
@@ -387,6 +512,11 @@ private let overlayLyrics = LyricsDocument(title: "Overlay Song", artist: "Artis
         prefs.showMenuBarIcon = false
         #expect(prefs.overlayAppearance == .glass)
         prefs.overlayAppearance = .frosted
+        prefs.overlayFrostAmount = 0.72
+        prefs.overlayAppearance = .glass
+        prefs.overlayFrostAmount = 0.26
+        prefs.overlayAppearance = .frosted
+        #expect(prefs.overlayFrostAmount == 0.72)
         prefs.overlayTransparency = 0.34
         prefs.showDockIcon = false
         prefs.showMenubarLyrics = true
@@ -403,6 +533,9 @@ private let overlayLyrics = LyricsDocument(title: "Overlay Song", artist: "Artis
         prefs.strictLyricsMatching = false
         let restored = Preferences(defaults: defaults)
         #expect(restored.overlayAppearance == .frosted && restored.overlayTransparency == 0.34)
+        #expect(restored.overlayFrostAmount == 0.72 && restored.overlayGlassFrostAmount == 0.26)
+        restored.overlayAppearance = .glass
+        #expect(restored.overlayFrostAmount == 0.26)
         let liveConfiguration = prefs.sourceConfigurationReader.read()
         #expect(liveConfiguration.sourceOrder == prefs.sourceOrder)
         #expect(!liveConfiguration.preferBilingual && !liveConfiguration.preferWordTiming && !liveConfiguration.strictMatching)

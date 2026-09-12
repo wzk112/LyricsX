@@ -157,16 +157,20 @@ struct HeldNoteRenderer: TextRenderer {
             return
         }
         var groups: [Int: [Text.Layout.Run]] = [:]
+        var order: [Int] = []
         for line in layout {
             for run in line {
                 if run[HiddenLyricAttribute.self] != nil { continue }
-                if let attribute = run[TimedWordAttribute.self] { groups[attribute.id, default: []].append(run) }
+                if let attribute = run[TimedWordAttribute.self] {
+                    if groups[attribute.id] == nil { order.append(attribute.id) }
+                    groups[attribute.id, default: []].append(run)
+                }
                 else { arrivalContext(context, run: run).draw(run) }
             }
         }
-        for id in groups.keys.sorted() {
+        for id in order {
             guard let runs = groups[id], let attribute = runs.first?[TimedWordAttribute.self] else { continue }
-            let ordered = runs.sorted {
+            let ordered = runs.count == 1 ? runs : runs.sorted {
                 guard let a = $0.characterIndices.min(), let b = $1.characterIndices.min() else { return false }
                 return a < b
             }

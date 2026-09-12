@@ -151,8 +151,10 @@ struct PreferencesView: View {
                 SettingToggle(title: "暂停时隐藏", detail: "暂停音乐时隐藏悬浮窗，继续播放后恢复。", value: $p.hideWhenPaused)
             }
             SettingsCard(title: "外观") {
-                OverlayAppearancePicker(selection: $p.overlayAppearance, transparency: p.overlayTransparency)
+                OverlayAppearancePicker(selection: $p.overlayAppearance, transparency: p.overlayTransparency,
+                    glassFrostAmount: p.overlayGlassFrostAmount, readingFrostAmount: p.overlayReadingFrostAmount)
                 SettingSlider(title: "透明度", detail: "数值越高越通透，越低越容易看清歌词；图例与悬浮窗同步变化。", impact: "范围 20–80%。高透明度在浅色或复杂背景上会降低对比度；可选择磨砂阅读。系统“降低透明度”开启时使用实色背景。", value: $p.overlayTransparency, range: OverlayAppearance.transparencyRange, step: 0.02, suffix: "%", multiplier: 100)
+                SettingSlider(title: "磨砂程度", detail: "柔化后方文字与图案，歌词文字保持清晰。两种样式分别记住调节值。", impact: "数值越高，背景细节越少；0% 仍保留材质自带的柔化效果。系统“降低透明度”开启时此调节不生效。", value: $p.overlayFrostAmount, range: OverlayAppearance.frostRange, step: 0.02, suffix: "%", multiplier: 100)
             }
             SettingsCard(title: "尺寸") {
                 SettingToggle(title: "自动调整高度", detail: "宽度固定，只随当前歌词换行调整高度；顶部位置保持不变。", value: $p.overlayAdaptiveSize)

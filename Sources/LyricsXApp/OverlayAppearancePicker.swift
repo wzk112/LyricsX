@@ -3,6 +3,8 @@ import SwiftUI
 struct OverlayAppearancePicker: View {
     @Binding var selection: OverlayAppearance
     let transparency: Double
+    let glassFrostAmount: Double
+    let readingFrostAmount: Double
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -17,7 +19,8 @@ struct OverlayAppearancePicker: View {
                                 HStack(spacing: 14) {
                                     ForEach(0..<5) { _ in Rectangle().fill(.white.opacity(0.22)).frame(width: 12) }
                                 }.rotationEffect(.degrees(25))
-                                OverlayMaterialPreview(appearance: appearance, transparency: transparency)
+                                OverlayMaterialPreview(appearance: appearance, transparency: transparency,
+                                    frostAmount: appearance == .glass ? glassFrostAmount : readingFrostAmount)
                                 VStack(spacing: 9) {
                                     Text("当前歌词").font(.system(size: 20, weight: .semibold))
                                     Text("翻译 / 下一句").font(.system(size: 12, weight: .medium))
@@ -49,10 +52,11 @@ struct OverlayAppearancePicker: View {
 private struct OverlayMaterialPreview: NSViewRepresentable {
     let appearance: OverlayAppearance
     let transparency: Double
+    let frostAmount: Double
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     func makeNSView(context: Context) -> OverlayGlassBackground { OverlayGlassBackground() }
     func updateNSView(_ view: OverlayGlassBackground, context: Context) {
-        view.configure(appearance: appearance, transparency: transparency,
+        view.configure(appearance: appearance, transparency: transparency, frostAmount: frostAmount,
                        reduceTransparency: reduceTransparency, reduceMotion: true)
     }
 }

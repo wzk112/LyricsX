@@ -56,8 +56,14 @@ import Testing
         defer { mainFrames.stop(); overlayFrames.stop(); main.close(); overlay.close() }
         for _ in 0..<20 where mainCount == 0 || overlayCount == 0 { runTracking(for: 0.04, mode: .default) }
         #expect(mainCount > 0 && overlayCount > 0)
+        #expect(mainFrames.requestedFrameRate == main.screen?.maximumFramesPerSecond)
+        #expect(overlayFrames.requestedFrameRate == overlay.screen?.maximumFramesPerSecond)
+        NotificationCenter.default.post(name: NSWindow.didChangeScreenNotification, object: overlay)
+        #expect(overlayFrames.requestedFrameRate == overlay.screen?.maximumFramesPerSecond)
         let before = overlayCount
-        runTracking(for: 0.12)
+        let started = ProcessInfo.processInfo.systemUptime
+        runTracking(for: 0.5)
+        let measured = Double(overlayCount - before) / (ProcessInfo.processInfo.systemUptime - started)
         #expect(overlayCount > before)
         // Notifications are scoped to their actual window, including the
         // interval before AppKit has finished minimizing or taking a snapshot.
@@ -77,6 +83,7 @@ import Testing
         let paused = overlayCount
         runTracking(for: 0.05)
         #expect(overlayCount == paused && !overlayFrames.deliveringFrames)
-        print("Native frame delivery: tracking and main-window minimize/close preserved overlay callbacks")
+        print(String(format: "Native frame delivery: requested %d Hz; measured %.1f callbacks/s; tracking and main-window minimize/close preserved overlay callbacks",
+                     overlayFrames.requestedFrameRate, measured))
     }
 }

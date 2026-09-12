@@ -34,6 +34,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private let presentation = OverlayPresentation()
     private let controls: NSHostingView<OverlayControlStrip>
     private unowned let model: AppModel
+    private let pointerLocation: () -> NSPoint
     private let frameAutosaveName: String?
     private var lastVisible = false
     private var controlsVisible = false
@@ -66,8 +67,10 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private var topDefaultsKey: String? { frameAutosaveName.map { "LyricsX.OverlayTop.\($0)" } }
     private var centerDefaultsKey: String? { frameAutosaveName.map { "LyricsX.OverlayCenter.\($0)" } }
 
-    init(model: AppModel, frameAutosaveName: String? = "LyricsXModernOverlay") {
+    init(model: AppModel, frameAutosaveName: String? = "LyricsXModernOverlay",
+         pointerLocation: @escaping () -> NSPoint = { NSEvent.mouseLocation }) {
         self.model = model
+        self.pointerLocation = pointerLocation
         self.frameAutosaveName = frameAutosaveName
         panel = DraggableOverlayPanel(contentRect: NSRect(x: 0, y: 0, width: model.preferences.overlayWidth, height: 174),
             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -193,6 +196,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         if panel.ignoresMouseEvents != prefs.overlayClickThrough { panel.ignoresMouseEvents = prefs.overlayClickThrough }
         setControlsDetached(prefs.overlayClickThrough)
         background.configure(appearance: prefs.overlayAppearance, transparency: prefs.overlayTransparency,
+                             frostAmount: prefs.overlayFrostAmount,
                              reduceTransparency: NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency,
                              reduceMotion: prefs.reduceMotion || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
         updateSizing()
@@ -210,10 +214,13 @@ final class OverlayController: NSObject, NSWindowDelegate {
         refreshAppearance()
     }
 
-    func refreshAppearance(at point: NSPoint = NSEvent.mouseLocation) {
+    func refreshAppearance(at point: NSPoint? = nil) {
+        let point = point ?? pointerLocation()
         let prefs = model.preferences
         let inside = panel.frame.contains(point) || (controlsDetached && controlsVisible && controlPanel.frame.contains(point))
         let hidden = lastVisible && prefs.hideOverlayOnHover && prefs.overlayLocked && inside
+        let rendering = lastVisible && !hidden
+        if viewport.rendering != rendering { viewport.rendering = rendering }
         if hoverHidden != hidden {
             hoverHidden = hidden
             NSAnimationContext.runAnimationGroup { context in
@@ -279,7 +286,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         let p = model.preferences
         let maximum = p.overlayLayoutWidth
         let mode = model.overlayPresentationMode
-        // No observation of the 60 Hz clock: only a line/setting change can
+        // No observation of the display clock: only a line/setting change can
         // request a new size. Retarget native animation immediately in either direction.
         let document = model.session.document
         let index = model.session.currentLineIndex
@@ -434,8 +441,8 @@ struct OverlayView: View {
                         OverlayLyricsContent(preferences: model.preferences, document: doc, index: index,
                                              lyricTime: { doc.lyricTime(for: presentation?.held?.position ?? model.session.position) },
                                              renderTime: { doc.lyricTime(for: presentation?.held?.position ?? model.session.presentationPosition()) },
-                                             playing: display.playing && windowVisible,
-                                             visible: windowVisible,
+                                             playing: display.playing && windowVisible && viewport.rendering,
+                                             visible: windowVisible && viewport.rendering,
                                              adaptiveCanvasWidth: model.preferences.overlayAdaptiveSize ? maximum - 60 : nil)
                     } else { Text(placeholder) }
                 }.font(.system(size: model.preferences.fontSize, weight: .semibold))
@@ -469,7 +476,7 @@ struct OverlayView: View {
             primary: display.mode == .waiting ? "•••" : compact ? display.track?.artist ?? "" : placeholder,
             compact: compact, artwork: display.mode == .song ? display.artwork.map(ObjectIdentifier.init) : nil)
         return OverlayContentTransition(identity: identity.songScope,
-            reduced: reduceMotion || p.reduceMotion, visible: windowVisible, preparingSince: presentation?.preparingSince)
+            reduced: reduceMotion || p.reduceMotion, visible: windowVisible && viewport.rendering, preparingSince: presentation?.preparingSince)
     }
     private func presentationHeight(maximum: Double, display: OverlayDisplaySnapshot) -> Double {
         guard model.preferences.overlayAdaptiveSize, let document = display.document,

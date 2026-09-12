@@ -5,6 +5,7 @@ import LyricsXCore
 @Observable @MainActor
 final class OverlayViewport {
     var width: Double
+    var rendering = true
     init(width: Double) { self.width = width }
 }
 

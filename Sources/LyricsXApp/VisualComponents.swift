@@ -77,7 +77,9 @@ struct LiveLyricText: View {
             let visible = active && rendering()
             let time = active ? document.lyricTime(for: visible ? session.position : session.presentationPosition()) : 0
             LyricRenderTimeline(running: visible && session.isPlaying && LyricRenderTimelineActivity.needsFrames(line: line, time: time, arrival: arrival),
-                                sampledTime: time, preciseTime: { document.lyricTime(for: session.presentationPosition()) }) { frameTime in
+                                sampledTime: time, preciseTime: { document.lyricTime(for: session.presentationPosition()) },
+                                continueFrames: { LyricRenderTimelineActivity.needsFrames(line: line,
+                                    time: document.lyricTime(for: session.presentationPosition()), arrival: arrival) }) { frameTime in
                 WordHighlight(line: line, time: frameTime, active: active, text: text, effects: effects, arrival: arrival)
                     .transaction { $0.animation = nil; $0.disablesAnimations = true }
             }

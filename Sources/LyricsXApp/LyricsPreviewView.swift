@@ -14,8 +14,9 @@ struct LyricsPreviewView: View {
         let doc = sample == 1 ? LyricPreviewSamples.heldNotes : sample == 2 ? LyricPreviewSamples.incremental : DemoContent.document
         return HStack(spacing: 36) {
             CoverArtwork(artwork: nil, demo: true).frame(width: 250)
-            TimelineView(.animation(minimumInterval: 1 / 60, paused: !visible || reduced)) { context in
-                let time = context.date.timeIntervalSince(anchor).truncatingRemainder(dividingBy: sample == 0 ? 96 : 12)
+            LyricRenderTimeline(running: visible && !reduced, sampledTime: Date().timeIntervalSince(anchor),
+                                preciseTime: { Date().timeIntervalSince(anchor) }) { elapsed in
+                let time = elapsed.truncatingRemainder(dividingBy: sample == 0 ? 96 : 12)
                 let index = doc.index(at: time) ?? 0
                 VStack(alignment: .leading, spacing: 20) {
                     Text("动效预览").font(.headline).foregroundStyle(.secondary)

@@ -118,6 +118,10 @@ struct OverlayLyricsContent: View {
         let sampledTime = lyricTime()
         GeometryReader { geometry in
             let translationHeight = OverlayTextMeasure.translationHeight(content.translation, font: prefs.translationFontSize, canvasWidth: geometry.size.width)
+            let translationFont = content.translation.map {
+                OverlayTextMeasure.layout($0, font: prefs.translationFontSize, canvasWidth: geometry.size.width,
+                    tracking: 0, weight: .medium, minimumScale: 0.75).fontSize
+            } ?? prefs.translationFontSize
             let nextY = nextCenter(translationHeight: translationHeight, primaryHeight: primaryHeight, nextHeight: nextHeight)
             let cue = OverlayCueSnapshot(document: document.id, index: index, line: line, text: text,
                 plan: plan, height: primaryHeight, fontSize: primaryFont, previewText: content.next,
@@ -161,7 +165,7 @@ struct OverlayLyricsContent: View {
                         .opacity(motion.opacity)
                         .position(x: geometry.size.width / 2, y: primaryHeight / 2 + motion.offset)
                     if let translation = content.translation {
-                        OverlayTranslationSurface(text: translation, fontSize: OverlayTextMeasure.layout(translation, font: prefs.translationFontSize, canvasWidth: geometry.size.width, tracking: 0, weight: .medium, minimumScale: 0.75).fontSize).equatable()
+                        OverlayTranslationSurface(text: translation, fontSize: translationFont).equatable()
                             .frame(width: geometry.size.width, height: translationHeight)
                             .blur(radius: translationMotion.blur)
                             .opacity(translationMotion.opacity * motion.auxiliaryOpacity(top: translationTop, primaryHeight: primaryHeight, reduced: reduced))

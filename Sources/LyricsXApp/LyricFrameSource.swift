@@ -23,6 +23,7 @@ struct LyricFrameSource: NSViewRepresentable {
     private var activity = WindowRenderActivity()
     private var attachment: UInt64 = 0
     private(set) var deliveringFrames = false
+    private(set) var requestedFrameRate = 0
 
     // CADisplayLink retains its target. The proxy must not retain the view.
     @MainActor private final class Target: NSObject {
@@ -40,6 +41,10 @@ struct LyricFrameSource: NSViewRepresentable {
         for name in WindowRenderActivity.notifications {
             NotificationCenter.default.addObserver(self, selector: #selector(updateActivity(_:)), name: name, object: window)
         }
+        NotificationCenter.default.addObserver(self, selector: #selector(updateFrameRate),
+            name: NSWindow.didChangeScreenNotification, object: window)
+        NotificationCenter.default.addObserver(self, selector: #selector(updateFrameRate),
+            name: NSApplication.didChangeScreenParametersNotification, object: nil)
         updateActivity(nil)
         // Attachment often precedes the window's first orderFront. Read again
         // after that operation even if AppKit coalesces its occlusion event.
@@ -56,16 +61,27 @@ struct LyricFrameSource: NSViewRepresentable {
         if deliveringFrames, link == nil, let window {
             let target = Target(); target.view = self
             let link = window.displayLink(target: target, selector: #selector(Target.tick(_:)))
-            link.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
-            link.add(to: .main, forMode: .common)
             self.link = link
+            updateFrameRate()
+            link.add(to: .main, forMode: .common)
         }
         link?.isPaused = !deliveringFrames
+    }
+    @objc private func updateFrameRate() {
+        guard let link else { return }
+        let maximum = max(1, window?.screen?.maximumFramesPerSecond ?? NSScreen.main?.maximumFramesPerSecond ?? 60)
+        guard requestedFrameRate != maximum else { return }
+        requestedFrameRate = maximum
+        // Request the current display's full cadence. AppKit moves this link
+        // across screens; macOS still applies power and thermal constraints.
+        let rate = Float(maximum)
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: rate, maximum: rate, preferred: rate)
     }
     func stop() {
         attachment &+= 1
         link?.invalidate(); link = nil
         deliveringFrames = false
+        requestedFrameRate = 0
         NotificationCenter.default.removeObserver(self)
     }
 }

@@ -14,6 +14,16 @@ final class Preferences {
     var hideOverlayOnHover: Bool { didSet { save("hideOverlayOnHover", hideOverlayOnHover) } }
     var overlayAppearance: OverlayAppearance { didSet { save("overlayAppearance", overlayAppearance.rawValue) } }
     var overlayTransparency: Double { didSet { save("overlayTransparency", overlayTransparency) } }
+    var overlayGlassFrostAmount: Double { didSet { save("overlayGlassFrostAmount", overlayGlassFrostAmount) } }
+    var overlayReadingFrostAmount: Double { didSet { save("overlayReadingFrostAmount", overlayReadingFrostAmount) } }
+    var overlayFrostAmount: Double {
+        get { overlayAppearance == .glass ? overlayGlassFrostAmount : overlayReadingFrostAmount }
+        set {
+            let amount = overlayAppearance.clampedFrost(newValue)
+            if overlayAppearance == .glass { overlayGlassFrostAmount = amount }
+            else { overlayReadingFrostAmount = amount }
+        }
+    }
     var overlayWidth: Double { didSet { save("overlayWidth", overlayWidth) } }
     var overlayAdaptiveSize: Bool { didSet { save("overlayAdaptiveSize", overlayAdaptiveSize) } }
     var fontSize: Double { didSet { save("fontSize", fontSize) } }
@@ -59,8 +69,16 @@ final class Preferences {
         overlayAppearance = OverlayAppearance(savedValue: d.string(forKey: "overlayAppearance"))
         let savedTransparency = d.object(forKey: "overlayTransparency") as? Double
         let legacyStrength = d.object(forKey: "overlayBackgroundStrength") as? Double
-        overlayTransparency = OverlayAppearance.clampedTransparency(
+        let transparency = OverlayAppearance.clampedTransparency(
             savedTransparency ?? legacyStrength.map { 1 - $0 } ?? OverlayAppearance.defaultTransparency)
+        overlayTransparency = transparency
+        func frost(_ style: OverlayAppearance, key: String) -> Double {
+            if let saved = d.object(forKey: key) as? Double { return style.clampedFrost(saved) }
+            return savedTransparency != nil || legacyStrength != nil
+                ? style.migratedFrost(transparency: transparency) : style.defaultFrost
+        }
+        overlayGlassFrostAmount = frost(.glass, key: "overlayGlassFrostAmount")
+        overlayReadingFrostAmount = frost(.frosted, key: "overlayReadingFrostAmount")
         if d.integer(forKey: "compactOverlayVersion") < 1 {
             if d.object(forKey: "overlayWidth") == nil || d.double(forKey: "overlayWidth") == 640 { d.set(520.0, forKey: "overlayWidth") }
             d.set(1, forKey: "compactOverlayVersion")
@@ -105,6 +123,8 @@ final class Preferences {
         if savedTransparency != overlayTransparency {
             d.set(overlayTransparency, forKey: "overlayTransparency")
         }
+        d.set(overlayGlassFrostAmount, forKey: "overlayGlassFrostAmount")
+        d.set(overlayReadingFrostAmount, forKey: "overlayReadingFrostAmount")
     }
     private func save(_ key: String, _ value: Any) { defaults.set(value, forKey: key) }
     func setSource(_ name: String, enabled: Bool) {
