@@ -200,11 +200,13 @@ struct PreferencesView: View {
                 SettingToggle(title: "减少动态效果", detail: "关闭位移、回弹、模糊和辉光，保留歌词同步提亮。", impact: "也会遵循 macOS 的减少动态效果设置。", value: $p.reduceMotion)
                 SettingToggle(title: "逐字轻微放大", detail: "演唱中的词柔和放大并轻微上浮，未唱部分保持接近原字号。", impact: "需要歌词自带逐字时间；开启动效会增加少量绘制开销。", value: $p.lyricWordLift)
                     .disabled(p.reduceMotion || systemReduceMotion)
-                SettingToggle(title: "长音辉光", detail: "较慢或拖长的词逐渐发光，短音不会一直闪亮。", impact: "需要逐字时间；模糊辉光会增加图形绘制开销。", value: $p.lyricGlow)
-                    .disabled(p.reduceMotion || systemReduceMotion)
                 SettingRow(title: "预览动效", detail: "使用独立演示歌词查看普通逐字、长音和高速增量效果。", impact: "不会控制播放器或写入歌词缓存。") {
                     Button("打开预览") { openWindow(id: "preview") }
                 }
+            }
+            SettingsCard(title: "长音辉光") {
+                LyricGlowPicker(enabled: $p.lyricGlow)
+                    .disabled(p.reduceMotion || systemReduceMotion)
             }
             hdrSettings
         }

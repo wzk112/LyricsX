@@ -83,6 +83,17 @@ import LyricsXCore
                 let data = try #require(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]))
                 try data.write(to: URL(fileURLWithPath: directory).appendingPathComponent(name + ".png"))
             }
+            for width in [500.0, 680.0] {
+                for scheme in [ColorScheme.light, .dark] {
+                    let preview = LyricGlowPicker(enabled: .constant(true))
+                        .frame(width: width).background(.background).environment(\.colorScheme, scheme)
+                    let renderer = ImageRenderer(content: preview); renderer.scale = 2
+                    let image = try #require(renderer.cgImage)
+                    let data = try #require(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]))
+                    try data.write(to: URL(fileURLWithPath: directory)
+                        .appendingPathComponent("picker-\(Int(width))-\(scheme).png"))
+                }
+            }
         }
         #expect(try energy(after) > energy(before) * 1.5)
     }

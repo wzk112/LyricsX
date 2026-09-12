@@ -1,5 +1,34 @@
 import SwiftUI
 
+struct SettingsIllustratedChoice<Preview: View>: View {
+    let title: String
+    let detail: String
+    let selected: Bool
+    let action: () -> Void
+    @ViewBuilder let preview: () -> Preview
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 10) {
+                preview().accessibilityHidden(true)
+                HStack {
+                    Text(title).font(.body.weight(.medium))
+                    Spacer(minLength: 0)
+                    Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(selected ? Color.accentColor : .secondary)
+                }
+                Text(detail).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }.padding(10).frame(maxWidth: .infinity, alignment: .topLeading)
+                .background(selected ? Color.accentColor.opacity(0.07) : .clear, in: .rect(cornerRadius: 16))
+                .overlay { RoundedRectangle(cornerRadius: 16).strokeBorder(selected ? Color.accentColor : .secondary.opacity(0.2), lineWidth: 1) }
+                .contentShape(.rect(cornerRadius: 16))
+        }.buttonStyle(.plain).accessibilityLabel(title).accessibilityHint(detail)
+            .accessibilityValue(selected ? "已选择" : "未选择")
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+}
+
 struct SettingsCard<Content: View>: View {
     let title: String
     @ViewBuilder let content: () -> Content
