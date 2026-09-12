@@ -21,7 +21,26 @@ enum LyricMotion {
         var offset = 0.0
         var blur = 0.0
         var opacity = 1.0
+    }
+}
 
+/// A cancelled arrival must return to its resting frame. An old completion
+/// cannot stop a newer track's arrival, even in the same run-loop turn.
+struct LyricArrivalClock {
+    private(set) var startedAt: Double?
+    private(set) var duration = 0.84
+    mutating func start(at time: Double, duration: Double = 0.84) { startedAt = time; self.duration = max(0.025, duration) }
+    mutating func cancel() { startedAt = nil }
+    mutating func finish(_ token: Double?) {
+        if let token, token == startedAt { cancel() }
+    }
+    func frame(at now: Double) -> LyricMotion.Frame {
+        guard let startedAt else { return .init() }
+        return LyricLinePresentation(start: startedAt, duration: duration, stablePrefixCount: 0, layoutTail: "").frame(at: now)
+    }
+    func finishedToken(at now: Double) -> Double? {
+        guard let startedAt, now - startedAt >= duration else { return nil }
+        return startedAt
     }
 }
 
@@ -29,21 +48,20 @@ private struct LyricArrival<Trigger: Equatable & Sendable>: ViewModifier {
     let trigger: Trigger
     let reduced: Bool
     let distance: Double
-    @State private var startedAt = 0.0
-    @State private var running = false
-    private let duration = 0.84
+    @State private var clock = LyricArrivalClock()
 
     func body(content: Content) -> some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 60, paused: !running || reduced)) { _ in
-            let elapsed = startedAt == 0 ? duration : ProcessInfo.processInfo.systemUptime - startedAt
-            let frame = reduced ? LyricMotion.Frame() : LyricLinePresentation(
-                start: 0, duration: duration, stablePrefixCount: 0, layoutTail: "").frame(at: elapsed)
+        TimelineView(.animation(minimumInterval: 1.0 / 60, paused: clock.startedAt == nil || reduced)) { _ in
+            let now = ProcessInfo.processInfo.systemUptime
+            let frame = reduced ? LyricMotion.Frame() : clock.frame(at: now)
             content.offset(y: frame.offset * distance / 10).blur(radius: frame.blur).opacity(frame.opacity)
-                .onChange(of: elapsed >= duration) { _, finished in if finished { running = false } }
+                .onChange(of: clock.finishedToken(at: now)) { _, token in clock.finish(token) }
         }
-        .onChange(of: trigger) { _, _ in startedAt = ProcessInfo.processInfo.systemUptime; running = !reduced }
-        .onChange(of: reduced) { _, value in if value { running = false } }
-        .onDisappear { running = false }
+        .onChange(of: trigger) { _, _ in
+            if reduced { clock.cancel() } else { clock.start(at: ProcessInfo.processInfo.systemUptime) }
+        }
+        .onChange(of: reduced) { _, value in if value { clock.cancel() } }
+        .onDisappear { clock.cancel() }
     }
 }
 

@@ -1,7 +1,7 @@
 import Foundation
 
-/// One policy for the picker, rendered rows and reserved panel height. Reserve
-/// a stable height per mode so missing translations never move the glass panel.
+/// One policy for the picker, rendered rows and panel measurement. Manual-height
+/// mode reserves two rows per auxiliary item; automatic height uses actual rows.
 enum OverlaySecondaryMode: String, CaseIterable, Identifiable {
     case translation, next, either, both, none
     var id: String { rawValue }
@@ -17,6 +17,11 @@ enum OverlaySecondaryMode: String, CaseIterable, Identifiable {
     struct Content: Equatable {
         var translation: String?
         var next: String?
+        func height(translationHeight: Double, nextHeight: Double, primarySpacing: Double, secondarySpacing: Double) -> Double {
+            let translationSpace = translation == nil ? 0 : translationHeight + primarySpacing
+            let nextSpace = next == nil ? 0 : nextHeight + (translation == nil ? primarySpacing : secondarySpacing)
+            return translationSpace + nextSpace
+        }
     }
     func content(translation: String?, next: String?) -> Content {
         func nonempty(_ text: String?) -> String? {
@@ -35,10 +40,10 @@ enum OverlaySecondaryMode: String, CaseIterable, Identifiable {
     func reservedHeight(translationSize: Double, nextSize: Double, primarySpacing: Double, secondarySpacing: Double) -> Double {
         switch self {
         case .none: 0
-        case .translation: translationSize * 1.4 + primarySpacing
+        case .translation: ceil(translationSize * 1.4) * 2 + primarySpacing
         case .next: nextSize * 2.8 + primarySpacing
-        case .either: max(translationSize * 1.4, nextSize * 2.8) + primarySpacing
-        case .both: translationSize * 1.4 + nextSize * 2.8 + primarySpacing + secondarySpacing
+        case .either: max(ceil(translationSize * 1.4) * 2, nextSize * 2.8) + primarySpacing
+        case .both: ceil(translationSize * 1.4) * 2 + nextSize * 2.8 + primarySpacing + secondarySpacing
         }
     }
 }

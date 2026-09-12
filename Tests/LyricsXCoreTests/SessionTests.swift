@@ -215,7 +215,9 @@ private final class ControlledRepository: LyricsRepository, @unchecked Sendable 
     @Test func silentProviderTimesOutInsteadOfLoadingForever() async throws {
         let repo = ControlledRepository(); let session = LyricsSession(repository: repo, searchTimeout: .milliseconds(20))
         session.accept(snapshot(first))
-        let deadline = ContinuousClock.now.advanced(by: .seconds(1))
+        // The 20 ms production deadline is unchanged. Allow the shared
+        // MainActor to finish concurrent native rendering before inspecting it.
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
         while session.phase == .loading, ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(10))
         }

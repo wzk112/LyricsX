@@ -15,7 +15,6 @@ final class Preferences {
     var overlayBackgroundStrength: Double { didSet { save("overlayBackgroundStrength", overlayBackgroundStrength) } }
     var overlayWidth: Double { didSet { save("overlayWidth", overlayWidth) } }
     var overlayAdaptiveSize: Bool { didSet { save("overlayAdaptiveSize", overlayAdaptiveSize) } }
-    var overlayMinimumWidth: Double { didSet { save("overlayMinimumWidth", overlayMinimumWidth) } }
     var fontSize: Double { didSet { save("fontSize", fontSize) } }
     var translationFontSize: Double { didSet { save("translationFontSize", translationFontSize) } }
     var nextLineFontSize: Double { didSet { save("nextLineFontSize", nextLineFontSize) } }
@@ -46,6 +45,7 @@ final class Preferences {
     var strictLyricsMatching: Bool { didSet { save("strictLyricsMatching", strictLyricsMatching) } }
     var directory: URL
     var launchAtLogin = SMAppService.mainApp.status == .enabled
+    var overlayLayoutWidth: Double { min(1000, max(320, overlayWidth)) }
     var overlayPrimarySpacing: Double { max(10, fontSize * 0.44) }
     var overlaySecondarySpacing: Double { max(8, max(translationFontSize, nextLineFontSize) * 0.6) }
     init(defaults d: UserDefaults = .standard) {
@@ -60,9 +60,12 @@ final class Preferences {
             if d.object(forKey: "overlayWidth") == nil || d.double(forKey: "overlayWidth") == 640 { d.set(520.0, forKey: "overlayWidth") }
             d.set(1, forKey: "compactOverlayVersion")
         }
-        overlayWidth = d.object(forKey: "overlayWidth") as? Double ?? 520
+        if d.integer(forKey: "fixedOverlayWidthVersion") < 1 {
+            if d.object(forKey: "overlayWidth") == nil || d.double(forKey: "overlayWidth") == 520 { d.set(620.0, forKey: "overlayWidth") }
+            d.set(1, forKey: "fixedOverlayWidthVersion")
+        }
+        overlayWidth = d.object(forKey: "overlayWidth") as? Double ?? 620
         overlayAdaptiveSize = d.object(forKey: "overlayAdaptiveSize") as? Bool ?? true
-        overlayMinimumWidth = min(920, max(320, d.object(forKey: "overlayMinimumWidth") as? Double ?? 320))
         fontSize = d.object(forKey: "fontSize") as? Double ?? 26
         translationFontSize = d.object(forKey: "translationFontSize") as? Double ?? 13
         nextLineFontSize = d.object(forKey: "nextLineFontSize") as? Double ?? 12

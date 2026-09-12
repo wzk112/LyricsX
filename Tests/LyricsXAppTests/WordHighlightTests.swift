@@ -165,6 +165,41 @@ import LyricsXCore
         }
     }
 
+    @Test func activeTextKeepsOriginInMainAndOverlayAlignments() throws {
+        for alignment in [TextAlignment.leading, .center] {
+            for direction in [LayoutDirection.leftToRight, .rightToLeft] {
+                for text in ["大願成就 コンコン", "A longer sentence that wraps naturally onto another line and stays aligned"] {
+                    func bounds(custom: Bool) throws -> CGRect {
+                        let view = Group {
+                            if custom {
+                                WordHighlight(line: .init(id: 0, time: 0, text: text, words: [.init(text: text, start: 0, end: 1)]), time: 5, active: true,
+                                text: text, effects: .init(lift: false, glow: false))
+                            } else { Text(text) }
+                        }.font(.system(size: 30, weight: .bold)).tracking(-0.4)
+                        .multilineTextAlignment(alignment)
+                        .fixedSize(horizontal: false, vertical: true).foregroundStyle(.white)
+                        .frame(width: 350, alignment: .leading).padding(30).background(.black)
+                        .environment(\.layoutDirection, direction)
+                        let renderer = ImageRenderer(content: view); renderer.scale = 1
+                        let bitmap = NSBitmapImageRep(cgImage: try #require(renderer.cgImage))
+                        var left = bitmap.pixelsWide, right = 0, top = bitmap.pixelsHigh, bottom = 0
+                        for y in 0..<bitmap.pixelsHigh {
+                            for x in 0..<bitmap.pixelsWide where (bitmap.colorAt(x: x, y: y)?.redComponent ?? 0) > 0.3 {
+                                left = min(left, x); right = max(right, x); top = min(top, y); bottom = max(bottom, y)
+                            }
+                        }
+                        return .init(x: left, y: top, width: right-left, height: bottom-top)
+                    }
+                    let native = try bounds(custom: false), active = try bounds(custom: true)
+                    print("Alignment \(alignment) \(direction): native=\(native), active=\(active)")
+                    #expect(abs(native.minX - active.minX) <= 1)
+                    #expect(abs(native.minY - active.minY) <= 1 && abs(native.height - active.height) <= 1)
+                }
+            }
+        }
+    }
+
+
     @Test func twoPrimaryLinesLeaveSeparateSpaceForTranslationAndNext() throws {
         let suite = "LyricsXTests-" + UUID().uuidString
         let defaults = try #require(UserDefaults(suiteName: suite))
@@ -227,6 +262,45 @@ import LyricsXCore
         #expect(nextDifference < 1)
     }
 
+    @Test func fullAdaptiveCardFitsDoubleRowsAndKeepsBottomBreathingRoom() throws {
+        let suite = "LyricsXTests-" + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let prefs = Preferences(defaults: defaults)
+        prefs.overlayAdaptiveSize = true; prefs.overlaySecondaryMode = .both
+        prefs.lyricGlow = false; prefs.lyricWordLift = false
+        let model = AppModel(repository: RenderingFixtureRepository(), preferences: prefs)
+        defer { model.stop() }
+        model.session.accept(.init(track: .init(playerID: "test", playerName: "Test", title: "HEADER"), position: 2, isPlaying: false), shouldSearch: false)
+        let doc = LyricsDocument(lines: [.init(id: 0, time: 0, text: "MMMM\nMMMM", translation: "MMMM\nMMMM"),
+                                         .init(id: 1, time: 10, text: "MMMM\nMMMM")])
+        model.session.use(doc, persist: false)
+        for (width, font) in [(320.0, 26.0), (620.0, 42.0), (1000.0, 32.0)] {
+            prefs.overlayWidth = width; prefs.fontSize = font
+            let height = OverlayTextMeasure.height(document: doc, index: 0, preferences: prefs, maximumWidth: width)
+            let view = OverlayView(model: model, viewport: .init(width: width))
+                .frame(width: width, height: height).background(.black)
+            let renderer = ImageRenderer(content: view); renderer.scale = 1
+            let bitmap = NSBitmapImageRep(cgImage: try #require(renderer.cgImage))
+            var bands: [ClosedRange<Int>] = [], begin: Int?
+            for y in 0...bitmap.pixelsHigh {
+                let ink = y < bitmap.pixelsHigh && (0..<bitmap.pixelsWide).contains {
+                    (bitmap.colorAt(x: $0, y: y)?.redComponent ?? 0) > 0.3
+                }
+                if ink, begin == nil { begin = y }
+                if !ink, let start = begin { bands.append(start...(y - 1)); begin = nil }
+            }
+            print("Full overlay \(width) x \(height): ink bands=\(bands)")
+            #expect(bands.count == 7) // Header, two primary, two translation, two next.
+            let last = try #require(bands.last)
+            #expect(bitmap.pixelsHigh - last.upperBound >= 20)
+            if bands.count == 7 {
+                #expect(bands[3].lowerBound - bands[2].upperBound >= 7)
+                #expect(bands[5].lowerBound - bands[4].upperBound >= 5)
+            }
+        }
+    }
+
     @Test func adaptiveOneToTwoLinePromotionPreservesPreviewPixels() throws {
         let suite = "LyricsXTests-" + UUID().uuidString
         let defaults = try #require(UserDefaults(suiteName: suite))
@@ -280,4 +354,9 @@ import LyricsXCore
         }
         return stride(from: 0, to: pixels.count, by: 4).reduce(0) { $0 + Double(pixels[$1]) }
     }
+}
+
+private struct RenderingFixtureRepository: LyricsRepository {
+    func lyrics(for track: Track, forceRefresh: Bool) -> AsyncThrowingStream<LyricCandidate, Error> { .init { $0.finish() } }
+    func save(_ document: LyricsDocument, for track: Track) async throws {}
 }

@@ -51,3 +51,13 @@ private struct AuxiliaryFixtureRepository: LyricsRepository {
     #expect(!session.documentHasWordTiming && !session.documentIsPlaceholder)
     session.stop()
 }
+
+@Test func fallbackReservesOnlyTheAuxiliaryTextThatIsDisplayed() {
+    let translation = OverlaySecondaryMode.either.content(translation: "翻译", next: "Next")
+    #expect(translation.height(translationHeight: 18, nextHeight: 34, primarySpacing: 12, secondarySpacing: 8) == 30)
+    let next = OverlaySecondaryMode.either.content(translation: nil, next: "Next")
+    #expect(next.height(translationHeight: 18, nextHeight: 17, primarySpacing: 12, secondarySpacing: 8) == 29)
+    let both = OverlaySecondaryMode.both.content(translation: "翻译", next: "Next")
+    #expect(both.height(translationHeight: 18, nextHeight: 17, primarySpacing: 12, secondarySpacing: 8) == 55)
+    #expect(OverlaySecondaryMode.Content().height(translationHeight: 18, nextHeight: 34, primarySpacing: 12, secondarySpacing: 8) == 0)
+}

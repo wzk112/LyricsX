@@ -92,17 +92,10 @@ final class OverlayController: NSObject, NSWindowDelegate {
         panel.delegate = self
         panel.onDragActivity = { [weak self] dragging in
             guard let self else { return }
-            if dragging && self.resizing {
-                self.resizeGeneration += 1
-                NSAnimationContext.runAnimationGroup { context in
-                    context.duration = 0
-                    self.panel.animator().setFrame(self.panel.frame, display: true)
-                }
-                self.resizing = false
-            }
+            if dragging { self.cancelResize() }
             self.dragging = dragging
             self.refreshAppearance()
-            if !dragging { self.saveFrame() }
+            if !dragging { self.saveFrame(); self.updateSizing() }
         }
         root.frame = NSRect(origin: .zero, size: panel.frame.size)
         // Blur the desktop itself, not the lyric foreground. Both materials share
@@ -191,6 +184,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     func stop() {
+        cancelResize()
         stopped = true
         resizeGeneration += 1
         hoverTimer?.invalidate(); hoverTimer = nil
@@ -211,6 +205,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         let autoHidden = prefs.hideWhenPaused && !model.session.isPlaying && !explicitShowWhilePaused
         let visible = prefs.overlayVisible && !autoHidden && model.session.track != nil
         if visible != lastVisible {
+            if !visible { cancelResize() }
             lastVisible = visible
             if visible { panel.orderFrontRegardless() } else { panel.orderOut(nil) }
         }
@@ -303,12 +298,12 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private func updateSizing() {
         guard !stopped, !dragging else { return }
         let p = model.preferences
-        let maximum = min(1000, max(320, p.overlayWidth))
+        let maximum = p.overlayLayoutWidth
         let compact = model.overlayUsesCompactPresentation
         // No observation of the 60 Hz clock: only a line/setting change can
         // request a new size. The existing hover timer expires shrink holds.
         let document = model.session.document, index = model.session.currentLineIndex
-        let configuration = [maximum, p.overlayMinimumWidth, p.fontSize, p.translationFontSize,
+        let configuration = [maximum, p.fontSize, p.translationFontSize,
             p.nextLineFontSize, Double(OverlaySecondaryMode.allCases.firstIndex(of: p.overlaySecondaryMode) ?? 0),
             p.overlayAdaptiveSize ? 1 : 0, compact ? 1 : 0, p.showTranslation ? 1 : 0]
         let changed = configuration != lastSizingConfiguration
@@ -333,7 +328,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         resizing = true
         let animate = !restoring && panel.isVisible && !p.reduceMotion && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = animate ? (size.width > panel.frame.width || size.height > panel.frame.height ? 0.28 : 0.42) : 0
+            context.duration = animate ? (size.width > panel.frame.width || size.height > panel.frame.height ? 0.34 : 0.48) : 0
             context.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 0, 0.18, 1)
             if animate { panel.animator().setFrame(target, display: true) }
             else { panel.setFrame(target, display: true) }
@@ -354,7 +349,19 @@ final class OverlayController: NSObject, NSWindowDelegate {
         return OverlayAnchor(topCenter: top).frame(size: size, in: screen?.visibleFrame ?? panel.frame)
     }
 
+    private func cancelResize() {
+        guard resizing else { return }
+        resizeGeneration += 1
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            panel.animator().setFrame(panel.frame, display: true)
+        }
+        resizing = false
+        lastSize = panel.frame.size
+    }
+
     func restoreOnScreen() {
+        cancelResize()
         let frame = anchoredFrame(size: panel.frame.size)
         let wasResizing = resizing; resizing = true
         if frame != panel.frame { panel.setFrame(frame, display: true) }
@@ -402,10 +409,12 @@ struct OverlayView: View {
     @Bindable var model: AppModel
     var viewport: OverlayViewport
     @State private var windowVisible = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
-        let maximum = min(1000, max(320, model.preferences.overlayWidth))
+        let maximum = model.preferences.overlayLayoutWidth
         let compact = model.overlayUsesCompactPresentation
         let height = presentationHeight(maximum: maximum)
+        let transition = contentTransition
         VStack(spacing: 0) {
             if model.overlayUsesCompactPresentation {
                 // Reserve the same top strip for controls in both layouts.
@@ -449,22 +458,38 @@ struct OverlayView: View {
                 }.font(.system(size: model.preferences.fontSize, weight: .semibold))
                     .shadow(color: .black.opacity(0.8), radius: 1.5, y: 1)
                     .shadow(color: .black.opacity(0.35), radius: 5, y: 1)
-                Spacer(minLength: 8)
+                Spacer(minLength: 10)
             }
         }.padding(.horizontal, 24).padding(.vertical, 12)
             .foregroundStyle(.white)
             .padding(6)
             .frame(width: maximum, height: compact ? 108 : height)
+            .modifier(transition)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .background(WindowVisibilityReader { windowVisible = $0 })
+            .background(WindowVisibilityReader { windowVisible = $0 }.frame(width: 0, height: 0))
+    }
+    private var contentTransition: OverlayContentTransition {
+        let p = model.preferences, compact = model.overlayUsesCompactPresentation
+        let document = model.session.document, index = model.session.currentLineIndex
+        var identity = OverlayContentIdentity(track: model.session.track?.id, document: document?.id,
+            primary: compact ? (model.session.isSearching ? "正在加载歌词…" : model.session.track?.artist ?? "") : placeholder,
+            compact: compact, artwork: compact ? model.artwork.map(ObjectIdentifier.init) : nil)
+        var incremental = false, duration = 1.0
+        if !compact, let document, let index, document.lines.indices.contains(index) {
+            identity.primary = p.text(document.lines[index].text)
+            let secondary = OverlayTextMeasure.secondary(document: document, index: index, preferences: p)
+            identity.translation = secondary.translation; identity.next = secondary.next
+            let plan = LyricLinePresentation.make(lines: document.lines, index: index, transform: p.text)
+            incremental = (plan?.stablePrefixCount ?? 0) > 0
+            if document.lines.indices.contains(index + 1) { duration = document.lines[index + 1].time - document.lines[index].time }
+        }
+        return OverlayContentTransition(identity: identity, incremental: incremental, lineDuration: duration,
+            reduced: reduceMotion || p.reduceMotion, visible: windowVisible)
     }
     private func presentationHeight(maximum: Double) -> Double {
         guard model.preferences.overlayAdaptiveSize, let document = model.session.document,
               let index = model.session.currentLineIndex else { return OverlayLayoutMetrics.height(preferences: model.preferences) }
-        let p = model.preferences
-        return OverlayLayoutMetrics.chromeHeight + OverlayTextMeasure.primaryHeight(document: document, index: index, preferences: p, canvasWidth: maximum - 60)
-            + p.overlaySecondaryMode.reservedHeight(translationSize: p.translationFontSize, nextSize: p.nextLineFontSize,
-                primarySpacing: p.overlayPrimarySpacing, secondarySpacing: p.overlaySecondarySpacing)
+        return OverlayTextMeasure.height(document: document, index: index, preferences: model.preferences, maximumWidth: maximum)
     }
     private var placeholder: String {
         if model.lyricsBlocked { return "已停用此歌曲歌词" }

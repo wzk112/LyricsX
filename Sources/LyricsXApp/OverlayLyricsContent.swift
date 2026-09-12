@@ -2,7 +2,8 @@ import SwiftUI
 import LyricsXCore
 
 enum OverlayLayoutMetrics {
-    static let chromeHeight = 78.0
+    // Header and insets plus a real bottom gap, including room for text bloom.
+    static let chromeHeight = 80.0
     @MainActor static func height(preferences: Preferences) -> Double {
         chromeHeight + ceil(preferences.fontSize * 1.4) * 2 + preferences.overlaySecondaryMode.reservedHeight(
             translationSize: preferences.translationFontSize, nextSize: preferences.nextLineFontSize,
@@ -55,8 +56,8 @@ struct OverlayLyricsContent: View {
         let next = document.lines.indices.contains(index + 1) ? prefs.text(document.lines[index + 1].text) : nil
         return (secondaryMode ?? prefs.overlaySecondaryMode).content(translation: translation, next: next)
     }
-    private func nextCenter(translation: Bool, primaryHeight: Double, nextHeight: Double) -> Double {
-        primaryHeight + prefs.overlayPrimarySpacing + (translation ? prefs.translationFontSize * 1.4 + prefs.overlaySecondarySpacing : 0) + nextHeight / 2
+    private func nextCenter(translationHeight: Double, primaryHeight: Double, nextHeight: Double) -> Double {
+        primaryHeight + prefs.overlayPrimarySpacing + (translationHeight > 0 ? translationHeight + prefs.overlaySecondarySpacing : 0) + nextHeight / 2
     }
 
     private func primaryHeight(at index: Int) -> Double {
@@ -78,19 +79,25 @@ struct OverlayLyricsContent: View {
         let previousPrimaryHeight = self.primaryHeight(at: index - 1)
         let nextScale = prefs.nextLineFontSize / prefs.fontSize
         let nextHeight = nextPrimaryHeight * nextScale
-        let translationHeight = prefs.translationFontSize * 1.4
         let translationTop = primaryHeight + prefs.overlayPrimarySpacing
-        let nextY = nextCenter(translation: content.translation != nil, primaryHeight: primaryHeight, nextHeight: nextHeight)
         let promoted = previous.next != nil && plan?.stablePrefixCount == 0
-        let distance = promoted ? nextCenter(translation: previous.translation != nil, primaryHeight: previousPrimaryHeight, nextHeight: primaryHeight * nextScale) - primaryHeight / 2 : nil
         let arrival = promoted ? plan?.withoutEntry(text: text) : plan
-        let height = primaryHeight + (secondaryMode ?? prefs.overlaySecondaryMode).reservedHeight(
-            translationSize: prefs.translationFontSize, nextSize: prefs.nextLineFontSize,
-            primarySpacing: prefs.overlayPrimarySpacing, secondarySpacing: prefs.overlaySecondarySpacing)
+        let auxiliaryHeight = adaptiveCanvasWidth == nil
+            ? (secondaryMode ?? prefs.overlaySecondaryMode).reservedHeight(
+                translationSize: prefs.translationFontSize, nextSize: prefs.nextLineFontSize,
+                primarySpacing: prefs.overlayPrimarySpacing, secondarySpacing: prefs.overlaySecondarySpacing)
+            : content.height(translationHeight: OverlayTextMeasure.translationHeight(content.translation,
+                font: prefs.translationFontSize, canvasWidth: adaptiveCanvasWidth ?? 0), nextHeight: nextHeight,
+                primarySpacing: prefs.overlayPrimarySpacing, secondarySpacing: prefs.overlaySecondarySpacing)
+        let height = primaryHeight + auxiliaryHeight
         let sampledTime = lyricTime()
         let moving = !reduced && plan.map { sampledTime < $0.start + $0.duration } == true
         let wordFrames = LyricRenderTimelineActivity.needsFrames(line: line, time: sampledTime, arrival: arrival)
         GeometryReader { geometry in
+            let translationHeight = OverlayTextMeasure.translationHeight(content.translation, font: prefs.translationFontSize, canvasWidth: geometry.size.width)
+            let previousTranslationHeight = OverlayTextMeasure.translationHeight(previous.translation, font: prefs.translationFontSize, canvasWidth: geometry.size.width)
+            let nextY = nextCenter(translationHeight: translationHeight, primaryHeight: primaryHeight, nextHeight: nextHeight)
+            let distance = promoted ? nextCenter(translationHeight: previousTranslationHeight, primaryHeight: previousPrimaryHeight, nextHeight: primaryHeight * nextScale) - primaryHeight / 2 : nil
             LyricRenderTimeline(running: playing && (moving || wordFrames), sampledTime: sampledTime, preciseTime: renderTime ?? lyricTime) { time in
                 let motion = OverlayMotionFrame.make(time: time, plan: plan, distance: distance, nextScale: nextScale, reduced: reduced)
                 ZStack {
@@ -101,7 +108,7 @@ struct OverlayLyricsContent: View {
                         .position(x: geometry.size.width / 2, y: primaryHeight / 2 + motion.offset)
                     if let translation = content.translation {
                         Text(translation).font(.system(size: prefs.translationFontSize, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.95)).lineLimit(1).minimumScaleFactor(0.75)
+                            .foregroundStyle(.white.opacity(0.95)).lineLimit(2).minimumScaleFactor(0.75).multilineTextAlignment(.center)
                             .fixedSize(horizontal: false, vertical: true)
                             .frame(width: geometry.size.width, height: translationHeight)
                             .opacity(motion.auxiliaryOpacity(top: translationTop, primaryHeight: primaryHeight, reduced: reduced))

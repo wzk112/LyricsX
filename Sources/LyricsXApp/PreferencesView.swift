@@ -126,12 +126,13 @@ struct PreferencesView: View {
             }
             settingsGroup("外观") {
                 sliderRow("文字大小", value: Bindable(prefs).fontSize, range: 18...42, step: 1, suffix: "pt")
-                Toggle("按当前歌词自适应大小", isOn: Bindable(prefs).overlayAdaptiveSize)
-                sliderRow(prefs.overlayAdaptiveSize ? "最大宽度" : "窗口宽度", value: Bindable(prefs).overlayWidth, range: 320...920, step: 20, suffix: "pt")
+                Toggle("按歌词换行调整高度", isOn: Bindable(prefs).overlayAdaptiveSize)
+                sliderRow("窗口宽度", value: Bindable(prefs).overlayWidth, range: 320...920, step: 20, suffix: "pt")
+                    .disabled(prefs.overlayAdaptiveSize)
                 if prefs.overlayAdaptiveSize {
-                    sliderRow("最小宽度", value: Binding(get: { min(prefs.overlayMinimumWidth, prefs.overlayWidth) },
-                        set: { prefs.overlayMinimumWidth = $0 }), range: 320...max(320, prefs.overlayWidth), step: 20, suffix: "pt")
-                    Text("长句及时扩展，短句稳定后收缩。顶部和水平中心保持固定，连续追加文字时预留空间。")
+                    Text("宽度固定为 \(Int(prefs.overlayLayoutWidth)) pt，只根据当前歌词换行调整高度。关闭自动高度后可手动设置宽度。")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Text("短句稳定后再降低高度，顶部保持固定，保留平滑缩放。")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 sliderRow("背景浓度", value: Bindable(prefs).overlayBackgroundStrength, range: 0...0.28, step: 0.02, suffix: "%", multiplier: 100)

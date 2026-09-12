@@ -112,18 +112,17 @@ struct WordHighlight: View {
     var effects = LyricEmphasisOptions()
     var arrival: LyricLinePresentation?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.multilineTextAlignment) private var alignment
+    @Environment(\.layoutDirection) private var direction
 
     var body: some View {
         var options = effects
         options.reduced = options.reduced || reduceMotion
-        return Group {
-            if active {
-                LyricLayoutBoundary(text: text + (arrival?.layoutTail ?? "")) {
-                    TimedLyricLabel(line: line, text: text, arrival: arrival).equatable()
-                        .textRenderer(HeldNoteRenderer(time: time, options: options, arrival: arrival))
-                        .allowedDynamicRange(options.usesHDR ? .high : .standard)
-                }
-            } else { Text(text) }
+        return LyricLayoutBoundary(text: text + (arrival?.layoutTail ?? "")) {
+            TimedLyricLabel(line: line, text: text, arrival: arrival).equatable()
+                .textRenderer(HeldNoteRenderer(time: time, options: options, arrival: arrival,
+                    alignment: alignment, direction: direction, active: active))
+                .allowedDynamicRange(options.usesHDR ? .high : .standard)
         }
     }
 }
@@ -132,6 +131,9 @@ struct HeldNoteRenderer: TextRenderer {
     let time: Double
     let options: LyricEmphasisOptions
     var arrival: LyricLinePresentation?
+    var alignment: TextAlignment = .leading
+    var direction: LayoutDirection = .leftToRight
+    var active = true
     // Extra drawing space doesn't affect measured text size or window position.
     var displayPadding: EdgeInsets { .init(top: 12, leading: 12, bottom: 12, trailing: 12) }
     static func hdrWhite(brightness: Double) -> Color {
@@ -140,9 +142,18 @@ struct HeldNoteRenderer: TextRenderer {
     }
 
     func draw(layout: Text.Layout, in context: inout GraphicsContext) {
-        // macOS places padded text's raster origin at the leading inset. Keep
-        // that drawing room for bloom while aligning the ink with native Text.
-        context.translateBy(x: -displayPadding.leading, y: 0)
+        // TextRenderer aligns paragraphs inside the extra horizontal drawing
+        // space. Remove only that alignment's share of the padding: leading
+        // text has none, centered text half, trailing text the full width.
+        let fraction = alignment == .center ? 0.5 : alignment == .trailing ? 1.0 : 0.0
+        let physicalFraction = direction == .rightToLeft ? 1 - fraction : fraction
+        context.translateBy(x: -(displayPadding.leading + displayPadding.trailing) * physicalFraction, y: 0)
+        // Inactive lines reuse the same shaped text and backing surface. No
+        // cue grouping, masks or per-frame clock is needed for these rows.
+        guard active else {
+            for line in layout { context.draw(line) }
+            return
+        }
         var groups: [Int: [Text.Layout.Run]] = [:]
         for line in layout {
             for run in line {

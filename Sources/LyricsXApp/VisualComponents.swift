@@ -70,11 +70,14 @@ struct LiveLyricText: View {
     var effects = LyricEmphasisOptions()
     var arrival: LyricLinePresentation?
     var body: some View {
-        if active && (line.hasWordTiming || arrival != nil) {
-            let time = document.lyricTime(for: session.position)
-            LyricRenderTimeline(running: session.isPlaying && LyricRenderTimelineActivity.needsFrames(line: line, time: time, arrival: arrival),
+        if line.hasWordTiming || arrival != nil {
+            // Keep this view identity when a row becomes current. Only active
+            // rows observe the session clock; others use the native draw path.
+            let time = active ? document.lyricTime(for: session.position) : 0
+            LyricRenderTimeline(running: active && session.isPlaying && LyricRenderTimelineActivity.needsFrames(line: line, time: time, arrival: arrival),
                                 sampledTime: time, preciseTime: { document.lyricTime(for: session.presentationPosition()) }) { frameTime in
-                WordHighlight(line: line, time: frameTime, active: true, text: text, effects: effects, arrival: arrival)
+                WordHighlight(line: line, time: frameTime, active: active, text: text, effects: effects, arrival: arrival)
+                    .transaction { $0.animation = nil; $0.disablesAnimations = true }
             }
         } else { Text(text) }
     }

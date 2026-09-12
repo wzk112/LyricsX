@@ -3,29 +3,35 @@ import Testing
 import LyricsXCore
 @testable import LyricsXApp
 
-@Test func adaptiveSizingGrowsImmediatelyAndShrinksOnlyAfterStableInterval() {
+@Test func fixedWidthOnlyGrowsOrShrinksHeightAfterStableLines() {
     var policy = OverlaySizingPolicy()
-    let large = NSSize(width: 640, height: 210), small = NSSize(width: 320, height: 170)
-    #expect(policy.resolve(large, at: 0) == large)
-    for step in 1...15 { #expect(policy.resolve(small, at: Double(step) / 10) == large) }
-    #expect(policy.resolve(small, at: 1.7) == small)
-    #expect(policy.resolve(large, at: 1.8) == large)
-    #expect(policy.resolve(small, at: 1.9) == large)
-    // A slightly narrower line lives in the dead band.
-    #expect(policy.resolve(.init(width: 600, height: 210), at: 4) == large)
-    #expect(policy.resolve(small, at: 4.1) == large)
-    #expect(policy.resolve(small, at: 5.5) == small)
+    let tall = NSSize(width: 620, height: 210), short = NSSize(width: 620, height: 170)
+    #expect(policy.resolve(tall, at: 0) == tall)
+    #expect(policy.resolve(short, at: 0.1) == tall)
+    #expect(policy.resolve(short, at: 0.7) == tall)
+    #expect(policy.resolve(short, at: 0.8) == short)
+    #expect(policy.resolve(tall, at: 0.9) == tall)
+    #expect(policy.resolve(.init(width: 620, height: 204), at: 20) == tall)
 }
 
-@Test func rapidAlternatingLyricsDoNotPumpTheWindow() {
+@Test func shortVerseDoesNotPumpTheHeight() {
     var policy = OverlaySizingPolicy()
-    let large = NSSize(width: 620, height: 220), small = NSSize(width: 320, height: 180)
-    _ = policy.resolve(large, at: 0)
-    for step in 1...250 {
-        #expect(policy.resolve(step % 5 == 0 ? large : small, at: Double(step) * 0.08) == large)
+    let tall = NSSize(width: 620, height: 220), short = NSSize(width: 620, height: 180)
+    _ = policy.resolve(tall, at: 0)
+    // Rapid interjections should not collapse and reopen the window.
+    for step in 1...120 {
+        #expect(policy.resolve(step % 5 == 0 ? tall : short, at: Double(step) * 0.1) == tall)
     }
-    #expect(policy.resolve(small, at: 21) == large)
-    #expect(policy.resolve(small, at: 22.3) == small)
+    #expect(policy.resolve(short, at: 12.1) == tall)
+    #expect(policy.resolve(short, at: 12.8) == short)
+}
+
+@Test func shrinkUsesTheCurrentHeightWithoutWaitingInSteps() {
+    var policy = OverlaySizingPolicy()
+    _ = policy.resolve(.init(width: 620, height: 220), at: 0)
+    _ = policy.resolve(.init(width: 620, height: 180), at: 0.1)
+    _ = policy.resolve(.init(width: 620, height: 145), at: 0.4)
+    #expect(policy.resolve(.init(width: 620, height: 145), at: 0.8).height == 145)
 }
 
 @Test func resizingKeepsTopAndHorizontalCenterAcrossSizesAndScreenClamps() {
@@ -45,21 +51,24 @@ import LyricsXCore
     let defaults = try #require(UserDefaults(suiteName: suite))
     defer { defaults.removePersistentDomain(forName: suite) }
     let p = Preferences(defaults: defaults)
-    p.overlayWidth = 620; p.overlayMinimumWidth = 360; p.overlaySecondaryMode = .none
+    p.overlayWidth = 620; p.overlaySecondaryMode = .none
     let doc = LyricsDocument(lines: [
         .init(id: 0, time: 0, text: "C"), .init(id: 1, time: 0.1, text: "Cor"),
         .init(id: 2, time: 0.2, text: "Corporation"),
         .init(id: 3, time: 3, text: String(repeating: "A long sentence with words ", count: 8))])
     let sizes = (0..<3).map { OverlayTextMeasure.desiredSize(document: doc, index: $0, preferences: p, maximumWidth: 620) }
     #expect(sizes.allSatisfy { $0 == sizes[0] })
-    #expect(sizes[0].width >= 360 && sizes[0].width < 620)
+    #expect(sizes[0].width == 620)
     let long = OverlayTextMeasure.desiredSize(document: doc, index: 3, preferences: p, maximumWidth: 620)
     #expect(long.width == 620 && long.height > sizes[0].height)
-    p.overlayMinimumWidth = 900
-    #expect(OverlayTextMeasure.desiredSize(document: doc, index: 0, preferences: p, maximumWidth: 620).width == 620)
+    let singleTranslation = OverlayTextMeasure.translationHeight("MMMM", font: 20, canvasWidth: 260)
+    #expect(OverlayTextMeasure.translationHeight("MMMM\nMMMM", font: 20, canvasWidth: 260) == singleTranslation * 2)
+    #expect(OverlayTextMeasure.translationHeight(String(repeating: "MMMM ", count: 6), font: 20, canvasWidth: 260) == singleTranslation * 2)
+    p.overlayWidth = 320
+    #expect(p.overlayLayoutWidth == 320)
     p.overlayAdaptiveSize = false
     let restored = Preferences(defaults: defaults)
-    #expect(!restored.overlayAdaptiveSize && restored.overlayMinimumWidth == 900)
+    #expect(!restored.overlayAdaptiveSize && restored.overlayLayoutWidth == 320)
 }
 
 private struct SizingRepository: LyricsRepository {
@@ -67,7 +76,7 @@ private struct SizingRepository: LyricsRepository {
     func save(_ document: LyricsDocument, for track: Track) async throws {}
 }
 
-@MainActor @Test func nativeResizeKeepsHostingBoundsAndTopEdgeWhileAnimating() async throws {
+@MainActor @Test func nativeHeightResizeKeepsWidthHostingBoundsAndTopEdge() async throws {
     _ = NSApplication.shared
     let suite = "LyricsXTests-" + UUID().uuidString
     let defaults = try #require(UserDefaults(suiteName: suite))
@@ -92,6 +101,9 @@ private struct SizingRepository: LyricsRepository {
     let top = overlay.panel.frame.maxY, center = overlay.panel.frame.midX
     let host = overlay.lyricHostingView, bounds = overlay.lyricHostingView.bounds
     let originalWidth = overlay.panel.frame.width
+    let originalHeight = overlay.panel.frame.height
+    let targetHeight = OverlayTextMeasure.height(document: doc, index: 1, preferences: prefs, maximumWidth: prefs.overlayLayoutWidth)
+    let maximum = prefs.overlayLayoutWidth
     model.session.seek(to: 3)
     var intermediate = false
     for _ in 0..<28 {
@@ -100,18 +112,34 @@ private struct SizingRepository: LyricsRepository {
         #expect(abs(frame.maxY - top) <= 1 && abs(frame.midX - center) <= 1)
         #expect(overlay.lyricHostingView === host && host.bounds == bounds)
         #expect(abs(host.frame.maxY - (overlay.panel.contentView?.bounds.maxY ?? 0)) <= 1)
-        if frame.width > originalWidth && frame.width < 620 { intermediate = true }
+        #expect(abs(frame.width - originalWidth) <= 1)
+        if frame.height > originalHeight && frame.height < targetHeight { intermediate = true }
     }
-    #expect(overlay.panel.frame.width == 620)
+    #expect(abs(overlay.panel.frame.width - maximum) <= 1)
     if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion { #expect(intermediate) }
+    #expect(abs(overlay.panel.frame.height - targetHeight) <= 1)
     model.session.seek(to: 6)
     try await Task.sleep(for: .milliseconds(250))
-    #expect(overlay.panel.frame.width == 620)
+    #expect(abs(overlay.panel.frame.height - targetHeight) <= 1)
     // Poll for the actual shrink deadline, tolerating a busy rendering executor.
-    for _ in 0..<60 where overlay.panel.frame.width > originalWidth {
+    for _ in 0..<115 where overlay.panel.frame.height > originalHeight + 1 {
         try await Task.sleep(for: .milliseconds(50))
     }
-    #expect(overlay.panel.frame.width <= originalWidth)
+    #expect(overlay.panel.frame.height <= originalHeight + 1)
+    #expect(abs(overlay.panel.frame.width - originalWidth) <= 1)
     #expect(abs(overlay.panel.frame.maxY - top) <= 1)
     #expect(host.bounds == bounds)
+    // Drag during a new expansion, then let sizing resume at the new anchor.
+    model.session.seek(to: 3)
+    try await Task.sleep(for: .milliseconds(50))
+    overlay.panel.onDragActivity?(true)
+    let heldHeight = overlay.panel.frame.height
+    overlay.panel.setFrameOrigin(.init(x: overlay.panel.frame.minX + 10, y: overlay.panel.frame.minY + 10))
+    let movedTop = overlay.panel.frame.maxY
+    try await Task.sleep(for: .milliseconds(420))
+    #expect(abs(overlay.panel.frame.height - heldHeight) <= 1)
+    overlay.panel.onDragActivity?(false)
+    try await Task.sleep(for: .milliseconds(500))
+    #expect(abs(overlay.panel.frame.maxY - movedTop) <= 1)
+    #expect(abs(overlay.panel.frame.height - targetHeight) <= 1)
 }

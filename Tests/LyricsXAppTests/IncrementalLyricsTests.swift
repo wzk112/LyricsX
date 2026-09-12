@@ -119,3 +119,54 @@ import LyricsXServices
     #expect(LyricRenderTimelineActivity.needsFrames(line: line, time: 3.95, arrival: nil))
     #expect(!LyricRenderTimelineActivity.needsFrames(line: line, time: 6, arrival: nil))
 }
+
+@Test func interruptedTrackArrivalsRestAndIgnoreObsoleteCompletions() {
+    var clock = LyricArrivalClock()
+    clock.start(at: 10)
+    #expect(clock.frame(at: 10.2).opacity < 1)
+    clock.cancel()
+    #expect(clock.frame(at: 10.21) == .init() && clock.startedAt == nil)
+    clock.start(at: 11)
+    let old = clock.finishedToken(at: 12)
+    clock.start(at: 12)
+    clock.finish(old)
+    #expect(clock.startedAt == 12 && clock.frame(at: 12.1).blur > 0)
+    clock.finish(clock.finishedToken(at: 13))
+    #expect(clock.startedAt == nil && clock.frame(at: 13) == .init())
+    // Many quick switches retain only the latest clock; no queued arrivals.
+    for index in 0..<100 { clock.start(at: Double(index) * 0.08) }
+    #expect(clock.frame(at: 9) == .init())
+}
+
+@Test func overlayContentChangesUseBoundedNonlinearBlurWithoutBlurringEachSuffix() {
+    let base = OverlayContentIdentity(track: "one", document: UUID(), primary: "Light", translation: "光", next: "Next")
+    #expect(OverlayBlurStyle.change(from: base, to: base, incremental: false, lineDuration: 3).radius == 0)
+    var changed = base
+    for field in 0..<6 {
+        changed = base
+        switch field {
+        case 0: changed.track = "two"
+        case 1: changed.document = UUID()
+        case 2: changed.primary = "Another line"
+        case 3: changed.translation = "新的翻译"
+        case 4: changed.next = "A different next line"
+        default: changed.compact = true
+        }
+        let style = OverlayBlurStyle.change(from: base, to: changed, incremental: false, lineDuration: 3)
+        #expect(style.radius > 0 && style.radius <= 3 && style.duration <= 0.48)
+        #expect(style.blur(elapsed: 0) == style.radius)
+        #expect(style.blur(elapsed: style.duration) == 0)
+        let half = style.blur(elapsed: style.duration / 2)
+        #expect(abs(half - style.radius / 2) > 0.1) // Not a linear fade.
+        #expect(style.blur(elapsed: style.duration * 0.1) > half)
+        #expect(half > style.blur(elapsed: style.duration * 0.9))
+    }
+    changed = base; changed.primary = "Light comes alive"
+    #expect(OverlayBlurStyle.change(from: base, to: changed, incremental: true, lineDuration: 0.08).radius == 0)
+    changed.primary = "A different fast line"
+    let fast = OverlayBlurStyle.change(from: base, to: changed, incremental: false, lineDuration: 0.08)
+    #expect(fast.duration < 0.08 && fast.radius < 0.5)
+    var clock = LyricArrivalClock()
+    clock.start(at: 2, duration: fast.duration)
+    #expect(clock.finishedToken(at: 2.08) == 2)
+}
