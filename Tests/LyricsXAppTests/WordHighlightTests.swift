@@ -55,12 +55,14 @@ import LyricsXCore
 }
 
 @Suite @MainActor struct WordHighlightRenderingTests {
-    @Test func effectsPreferencesPersistWithHDROffByDefault() throws {
+    @Test func effectsPreferencesDefaultToAutomaticHDRAndKeepExplicitOptOut() throws {
         let suite = "LyricsXTests-" + UUID().uuidString
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let prefs = Preferences(defaults: defaults)
-        #expect(prefs.lyricWordLift && prefs.lyricGlow && !prefs.lyricHDR)
+        #expect(prefs.lyricWordLift && prefs.lyricGlow && prefs.lyricHDR)
+        prefs.lyricHDR = false
+        #expect(!Preferences(defaults: defaults).lyricHDR)
         prefs.lyricWordLift = false; prefs.lyricGlow = false; prefs.lyricHDR = true; prefs.lyricHDRBrightness = 3.2
         let restored = Preferences(defaults: defaults)
         #expect(!restored.lyricWordLift && !restored.lyricGlow && restored.lyricHDR)
@@ -74,7 +76,14 @@ import LyricsXCore
         let after = try render(time: 4, effects: .init())
         #expect(plain.width == bloom.width && before.width == after.width)
         #expect(plain.height == bloom.height && before.height == after.height)
-        #expect(try energy(bloom) > energy(plain) * 1.03)
+        #expect(try energy(bloom) > energy(plain) * 1.10)
+        if let directory = ProcessInfo.processInfo.environment["LYRICSX_GLOW_QA"] {
+            try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+            for (name, image) in [("ordinary", plain), ("sdr-glow", bloom)] {
+                let data = try #require(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]))
+                try data.write(to: URL(fileURLWithPath: directory).appendingPathComponent(name + ".png"))
+            }
+        }
         #expect(try energy(after) > energy(before) * 1.5)
     }
 
@@ -103,6 +112,9 @@ import LyricsXCore
         #expect(hdrPeak > 1.1)
         let unsupported = try render(time: 1.6, effects: .init(lift: false, glow: true, hdr: true), hdrSupported: false)
         #expect(peak(unsupported) <= 1.01)
+        #expect(abs(try energy(unsupported) - energy(sdr)) < 0.01)
+        let limited = try render(time: 1.6, effects: .init(lift: false, glow: true, hdr: true, hdrBrightness: 3.2), hdrHeadroom: 1.2)
+        #expect(peak(limited) > 1 && peak(limited) <= 1.21)
         let boosted = try render(time: 1.6, effects: .init(lift: false, glow: true, hdr: true, hdrBrightness: 3.2))
         #expect(peak(boosted) > hdrPeak * 1.4)
     }
@@ -341,12 +353,13 @@ import LyricsXCore
         #expect(nextDifference < 1)
     }
 
-    private func render(time: Double, effects: LyricEmphasisOptions, hdrSupported: Bool = true) throws -> CGImage {
+    private func render(time: Double, effects: LyricEmphasisOptions, hdrSupported: Bool = true, hdrHeadroom: Double = 4) throws -> CGImage {
         let line = LyricLine(id: 0, time: 0, text: "Stay 光", words: [
             .init(text: "Stay", start: 0.1, end: 3.2), .init(text: "光", start: 3.2, end: 4)
         ])
         let view = WordHighlight(line: line, time: time, active: true, text: line.text, effects: effects)
             .environment(\.lyricHDRSupported, hdrSupported)
+            .environment(\.lyricHDRHeadroom, hdrHeadroom)
             .font(.system(size: 38, weight: .semibold)).foregroundStyle(.white)
             .padding(24).frame(width: 350, height: 130).background(.black)
         let renderer = ImageRenderer(content: view)

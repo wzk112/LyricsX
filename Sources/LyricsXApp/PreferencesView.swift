@@ -212,22 +212,18 @@ struct PreferencesView: View {
 
     private var hdrSettings: some View {
         @Bindable var p = model.preferences
-        let supported = model.displays.supported
-        let unavailable = !supported || !p.lyricGlow || p.reduceMotion || systemReduceMotion
+        let unavailable = !p.lyricGlow || p.reduceMotion || systemReduceMotion
         return SettingsCard(title: "HDR") {
-            SettingRow(title: "显示器支持", detail: supported ? "已检测到兼容显示器。窗口移到普通屏幕时会自动使用普通辉光。" : "当前连接的显示器不支持 HDR 辉光，无法开启。连接兼容显示器后会重新检测。") {
-                Text(supported ? "支持" : "不支持").font(.callout.weight(.medium))
-                    .foregroundStyle(supported ? Color.green : Color.secondary)
+            ForEach(model.displays.displays) { display in
+                SettingRow(title: "EDR 支持", detail: display.name + (display.builtIn ? "（内置屏幕）。" : "（外接屏幕）。") + display.explanation) {
+                    Text(display.status).font(.callout.weight(.medium))
+                        .foregroundStyle(display.supported ? Color.green : Color.secondary)
+                }
             }
-            SettingToggle(title: "HDR 辉光增强", detail: "让长音辉光超过普通白色亮度。需先开启长音辉光。", impact: "高亮效果可能更刺眼并增加能耗；实际亮度由屏幕和系统决定。", value: Binding(
-                get: { supported && p.lyricHDR }, set: { if supported { p.lyricHDR = $0 } }))
+            SettingToggle(title: "HDR 辉光增强", detail: "默认开启，按所在屏幕能力增强长音辉光。普通屏幕自动使用普通亮度。需先开启长音辉光。", impact: "高亮效果可能更刺眼并增加能耗；实际亮度由屏幕和系统决定。", value: $p.lyricHDR)
                 .disabled(unavailable)
-            SettingSlider(title: "HDR 亮度", detail: "设置辉光的目标强度。显示器可能限制最终亮度，不会改变屏幕亮度设置。", value: $p.lyricHDRBrightness, range: 1...4, step: 0.1, suffix: "×", decimals: 1)
+            SettingSlider(title: "HDR 亮度", detail: "设置辉光的目标强度，自动限制在所在屏幕的能力内。不会改变屏幕亮度设置。", value: $p.lyricHDRBrightness, range: 1...4, step: 0.1, suffix: "×", decimals: 1)
                 .disabled(unavailable || !p.lyricHDR)
-            if !supported && p.lyricHDR {
-                Text("已暂时停用 HDR，重新连接兼容显示器后恢复已保存的偏好。")
-                    .font(.caption).foregroundStyle(.secondary).padding(16)
-            }
         }
     }
 
@@ -303,6 +299,13 @@ struct PreferencesView: View {
                     Text("令牌保存在系统钥匙串中，只用于访问该来源。不要分享令牌；保存空内容会移除它。")
                         .font(.caption).foregroundStyle(.secondary)
                 }.padding(16).task { token = TokenStore.read() ?? "" }
+            }
+            SettingsCard(title: "显示诊断") {
+                ForEach(model.displays.displays) { display in
+                    SettingRow(title: display.name, detail: "EDR 潜在余量 \(display.potential.formatted(.number.precision(.fractionLength(2))))×；当前报告 \(display.current.formatted(.number.precision(.fractionLength(2))))×。这些是相对普通白色的倍数，不是尼特数或面板认证。") {
+                        Text(display.status).foregroundStyle(.secondary)
+                    }
+                }
             }
             SettingsCard(title: "搜索排除记录") {
                 SettingRow(title: "恢复全部歌词搜索", detail: "已停用 \(p.blockedTracks.count) 首歌曲、\(p.blockedAlbums.count) 张专辑。", impact: "会清空排除记录，之前因匹配错误停用的歌曲也会重新搜索；不会删除歌词文件。") {

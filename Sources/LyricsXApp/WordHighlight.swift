@@ -31,7 +31,7 @@ struct LyricEmphasisFrame: Equatable {
         scale = options.lift && !options.reduced
             ? 0.985 + 0.015 * Self.smooth(progress / 0.22) + smallLift + 0.055 * emphasis : 1
         lift = options.lift && !options.reduced ? 0.035 * emphasis + smallLift * 0.5 : 0
-        glow = options.glow && !options.reduced ? 0.8 * emphasis : 0
+        glow = options.glow && !options.reduced ? (options.usesHDR ? 0.8 : 1.0) * emphasis : 0
     }
 
     static func smooth(_ value: Double) -> Double {
@@ -115,11 +115,13 @@ struct WordHighlight: View {
     @Environment(\.multilineTextAlignment) private var alignment
     @Environment(\.layoutDirection) private var direction
     @Environment(\.lyricHDRSupported) private var hdrSupported
+    @Environment(\.lyricHDRHeadroom) private var hdrHeadroom
 
     var body: some View {
         var options = effects
         options.reduced = options.reduced || reduceMotion
-        options.hdr = options.hdr && hdrSupported
+        options.hdr = options.hdr && hdrSupported && hdrHeadroom.isFinite && hdrHeadroom > 1
+        if options.hdr { options.hdrBrightness = min(options.hdrBrightness, hdrHeadroom) }
         return LyricLayoutBoundary(text: text + (arrival?.layoutTail ?? "")) {
             TimedLyricLabel(line: line, text: text, arrival: arrival).equatable()
                 .textRenderer(HeldNoteRenderer(time: time, options: options, arrival: arrival,
@@ -201,7 +203,10 @@ struct HeldNoteRenderer: TextRenderer {
                     let white = options.usesHDR ? Self.hdrWhite(brightness: options.hdrBrightness) : .white
                     var bloom = drawing
                     bloom.opacity *= frame.glow
-                    bloom.addFilter(.shadow(color: white.opacity(0.85), radius: min(9, bounds.height * 0.19)))
+                    // SDR cannot exceed white. A denser, slightly wider halo
+                    // makes the held cue visible without an extra render pass.
+                    bloom.addFilter(.shadow(color: white.opacity(options.usesHDR ? 0.85 : 1),
+                        radius: min(9, bounds.height * (options.usesHDR ? 0.19 : 0.24))))
                     bloom.drawLayer { ink in
                         clipReveal(&ink, run: run, progress: progress)
                         ink.clipToLayer { mask in mask.draw(run) }

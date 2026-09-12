@@ -106,7 +106,9 @@ final class Preferences {
         reduceMotion = d.bool(forKey: "reduceMotion")
         lyricWordLift = d.object(forKey: "lyricWordLift") as? Bool ?? true
         lyricGlow = d.object(forKey: "lyricGlow") as? Bool ?? true
-        lyricHDR = d.bool(forKey: "lyricHDR")
+        // Request enhancement by default; each window's display policy gates it.
+        // A saved false is an explicit opt-out and must survive reconnects.
+        lyricHDR = d.object(forKey: "lyricHDR") as? Bool ?? true
         lyricHDRBrightness = min(4, max(1, d.object(forKey: "lyricHDRBrightness") as? Double ?? 1.6))
         conversion = d.string(forKey: "conversion") ?? "原文"
         playerMode = PlayerMode(rawValue: d.string(forKey: "playerMode") ?? "automatic") ?? .automatic
