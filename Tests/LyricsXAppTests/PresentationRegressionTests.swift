@@ -225,63 +225,95 @@ private let overlayLyrics = LyricsDocument(title: "Overlay Song", artist: "Artis
         defer { defaults.removePersistentDomain(forName: suite) }
         let prefs = Preferences(defaults: defaults)
         prefs.overlayVisible = true; prefs.hideWhenPaused = false; prefs.hideOverlayOnHover = false
-        prefs.reduceMotion = true; prefs.overlayTransparency = 0.6
+        prefs.reduceMotion = false; prefs.overlayTransparency = 0.6
         let model = AppModel(repository: EmptyRepository(), preferences: prefs)
         model.session.accept(.init(track: overlayTrack, position: 1, isPlaying: false), shouldSearch: false)
         model.session.use(LyricsDocument(title: overlayTrack.title, artist: overlayTrack.artist,
-            lines: [.init(id: 0, time: 0, text: "Light moves through the glass", translation: "光线穿过玻璃"),
+            lines: [.init(id: 0, time: 0, text: "Light moves through the glass", translation: "光线穿过玻璃",
+                          words: [.init(text: "Light", start: 0, end: 3)]),
                     .init(id: 1, time: 20, text: "And the words stay clear")]), persist: false)
         let overlay = OverlayController(model: model, frameAutosaveName: nil)
-        let backdrop = NSPanel(contentRect: overlay.panel.frame.insetBy(dx: -20, dy: -20), styleMask: [.borderless], backing: .buffered, defer: false)
-        defer { backdrop.orderOut(nil); overlay.stop(); model.stop() }
-        backdrop.level = overlay.panel.level
-        backdrop.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        backdrop.hidesOnDeactivate = false
+        defer { overlay.stop(); model.stop() }
         overlay.panel.onDragActivity?(true)
         let directory = try #require(ProcessInfo.processInfo.environment["LYRICSX_CONTROL_QA"])
         try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+        let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("scripts/qa/glass-backdrop.swift")
+        let executable = directory + "/glass-backdrop"
+        let compiler = Process(); compiler.executableURL = URL(fileURLWithPath: "/usr/bin/swiftc")
+        compiler.arguments = [fixture.path, "-o", executable]
+        try compiler.run(); compiler.waitUntilExit()
+        try #require(compiler.terminationStatus == 0)
         let examples = OverlayAppearance.allCases.flatMap { appearance in
-            ["light", "dark", "color"].map { (appearance, $0, 0.6) } + [(appearance, "light", 0.2), (appearance, "light", 0.8)]
+            ["light", "dark", "color"].map { (appearance, $0, 0.6) }
+                + [0.2, 0.8].flatMap { transparency in ["light", "text"].map { (appearance, $0, transparency) } }
         }
-        for (appearance, surface, transparency) in examples {
-            prefs.overlayAppearance = appearance
-            prefs.overlayTransparency = transparency
-            let dark = surface == "dark"
-            backdrop.backgroundColor = dark ? NSColor(white: 0.04, alpha: 1) : .white
-            let scene = NSView(frame: NSRect(origin: .zero, size: backdrop.frame.size))
-            scene.wantsLayer = true
-            if surface == "color" {
-                let colors: [NSColor] = [.systemBlue, .systemTeal, .systemOrange, .systemPink]
-                for i in 0..<16 {
-                    let band = CALayer()
-                    band.frame = NSRect(x: Double(i) * scene.frame.width / 16, y: 0,
-                                        width: scene.frame.width / 16, height: scene.frame.height)
-                    band.backgroundColor = colors[(i / 4) % colors.count].withAlphaComponent(i.isMultiple(of: 2) ? 1 : 0.65).cgColor
-                    scene.layer?.addSublayer(band)
+        for hdr in [false, true] {
+            prefs.lyricHDR = hdr
+            for (appearance, surface, transparency) in examples {
+                prefs.overlayAppearance = appearance
+                prefs.overlayTransparency = transparency
+                let dark = surface == "dark"
+                overlay.panel.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+                overlay.controlPanel.appearance = overlay.panel.appearance
+                let frame = overlay.panel.frame.insetBy(dx: -20, dy: -20)
+                let ready = directory + "/" + UUID().uuidString + ".ready"
+                let backdrop = Process(); backdrop.executableURL = URL(fileURLWithPath: executable)
+                backdrop.arguments = [frame.minX, frame.minY, frame.width, frame.height].map { String(Double($0)) }
+                    + [surface, ready]
+                try backdrop.run()
+                defer {
+                    if backdrop.isRunning { backdrop.terminate() }
+                    backdrop.waitUntilExit()
+                    try? FileManager.default.removeItem(atPath: ready)
+                }
+                // Readiness is bounded and yields the main actor for native drawing.
+                for _ in 0..<100 where !FileManager.default.fileExists(atPath: ready) {
+                    try await Task.sleep(for: .milliseconds(20))
+                }
+                try #require(FileManager.default.fileExists(atPath: ready))
+                overlay.panel.orderFrontRegardless()
+                for detached in [false, true] {
+                    model.setOverlayClickThrough(detached)
+                    try await Task.sleep(for: .milliseconds(100))
+                    overlay.refreshAppearance(at: NSPoint(x: overlay.panel.frame.midX, y: overlay.panel.frame.midY))
+                    try await Task.sleep(for: .milliseconds(500))
+                    let window = detached ? overlay.controlPanel : overlay.panel
+                    let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+                    let name = "controls-\(appearance.rawValue)-\(surface)-\(Int((transparency * 100).rounded()))-\(hdr ? "hdr" : "sdr")-\(detached ? "detached" : "inline").png"
+                    // Capture different processes together, including real EDR
+                    // compositing. Isolated window captures can replace glass with grey.
+                    let frame = window.frame
+                    let top = (NSScreen.screens.first?.frame.maxY ?? 0) - frame.maxY
+                    let region = "\(Int(frame.minX)),\(Int(top)),\(Int(frame.width)),\(Int(frame.height))"
+                    process.arguments = ["-x", "-R", region, directory + "/" + name]
+                    try process.run(); process.waitUntilExit()
+                    #expect(process.terminationStatus == 0)
                 }
             }
-            backdrop.contentView = scene
-            overlay.panel.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
-            overlay.controlPanel.appearance = overlay.panel.appearance
-            backdrop.orderFrontRegardless(); overlay.panel.orderFrontRegardless()
-            backdrop.displayIfNeeded()
-            for detached in [false, true] {
-                model.setOverlayClickThrough(detached)
-                try await Task.sleep(for: .milliseconds(100))
-                overlay.refreshAppearance(at: NSPoint(x: overlay.panel.frame.midX, y: overlay.panel.frame.midY))
-                try await Task.sleep(for: .milliseconds(250))
-                let window = detached ? overlay.controlPanel : overlay.panel
-                let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-                let name = "controls-\(appearance.rawValue)-\(surface)-\(Int((transparency * 100).rounded()))-\(detached ? "detached" : "inline").png"
-                // Capture the compositor result, not an isolated window image:
-                // window-only capture can replace behind-window glass with grey.
-                let frame = window.frame
-                let top = (NSScreen.screens.first?.frame.maxY ?? 0) - frame.maxY
-                let region = "\(Int(frame.minX)),\(Int(top)),\(Int(frame.width)),\(Int(frame.height))"
-                process.arguments = ["-x", "-R", region, directory + "/" + name]
-                try process.run(); process.waitUntilExit()
-                #expect(process.terminationStatus == 0)
+        }
+        // Measure fine background detail away from the foreground lyrics. A
+        // successful screenshot alone cannot detect an opaque grey fallback.
+        func backgroundDetail(_ style: String, _ range: String) throws -> Double {
+            let path = directory + "/controls-\(style)-text-80-\(range)-inline.png"
+            let bitmap = try #require(NSBitmapImageRep(data: Data(contentsOf: URL(fileURLWithPath: path))))
+            let scale = Double(bitmap.pixelsWide) / overlay.panel.frame.width
+            var energy = 0.0, samples = 0.0
+            for y in Int(78 * scale)..<Int(120 * scale) {
+                for x in Int(32 * scale)..<Int(110 * scale) {
+                    let first = try #require(bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+                    let next = try #require(bitmap.colorAt(x: x + 1, y: y)?.usingColorSpace(.deviceRGB))
+                    energy += abs(first.redComponent - next.redComponent)
+                    samples += 1
+                }
             }
+            return energy / samples
+        }
+        for range in ["sdr", "hdr"] {
+            let clear = try backgroundDetail("glass", range)
+            let frosted = try backgroundDetail("frosted", range)
+            #expect(clear > 0.015)
+            #expect(clear > frosted * 3 + 0.005)
         }
     }
 

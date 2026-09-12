@@ -48,6 +48,9 @@ final class OverlayGlassBackground: NSView {
         // .regular softens the backdrop more for reading; .clear keeps its
         // texture and refraction. Tint color is not an opacity control.
         glass.style = appearance == .glass ? .clear : .regular
+        // Mix the native optical surface with the actual desktop. Changing
+        // only the scrim leaves the full backdrop blur in place at every value.
+        glass.alphaValue = appearance == .glass ? 1 - next.transparency : 1
         glass.isHidden = reduceTransparency
         layer?.backgroundColor = reduceTransparency ? NSColor(white: 0.12, alpha: 1).cgColor : nil
         gradient.colors = appearance.shadeOpacities(transparency: next.transparency)
@@ -63,6 +66,7 @@ final class OverlayGlassBackground: NSView {
             gradient.add(transition, forKey: "appearance")
         }
     }
+
 }
 
 /// AppKit resizes this backing gradient with the material's content view.
