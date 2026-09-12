@@ -12,7 +12,8 @@ final class Preferences {
     var overlayLocked: Bool { didSet { save("overlayLocked", overlayLocked) } }
     var overlayClickThrough: Bool { didSet { save("overlayClickThrough", overlayClickThrough) } }
     var hideOverlayOnHover: Bool { didSet { save("hideOverlayOnHover", hideOverlayOnHover) } }
-    var overlayBackgroundStrength: Double { didSet { save("overlayBackgroundStrength", overlayBackgroundStrength) } }
+    var overlayAppearance: OverlayAppearance { didSet { save("overlayAppearance", overlayAppearance.rawValue) } }
+    var overlayTransparency: Double { didSet { save("overlayTransparency", overlayTransparency) } }
     var overlayWidth: Double { didSet { save("overlayWidth", overlayWidth) } }
     var overlayAdaptiveSize: Bool { didSet { save("overlayAdaptiveSize", overlayAdaptiveSize) } }
     var fontSize: Double { didSet { save("fontSize", fontSize) } }
@@ -55,7 +56,11 @@ final class Preferences {
         overlayLocked = d.bool(forKey: "overlayLocked")
         overlayClickThrough = d.bool(forKey: "overlayClickThrough")
         hideOverlayOnHover = d.bool(forKey: "hideOverlayOnHover")
-        overlayBackgroundStrength = d.object(forKey: "overlayBackgroundStrength") as? Double ?? 0
+        overlayAppearance = OverlayAppearance(savedValue: d.string(forKey: "overlayAppearance"))
+        let savedTransparency = d.object(forKey: "overlayTransparency") as? Double
+        let legacyStrength = d.object(forKey: "overlayBackgroundStrength") as? Double
+        overlayTransparency = OverlayAppearance.clampedTransparency(
+            savedTransparency ?? legacyStrength.map { 1 - $0 } ?? OverlayAppearance.defaultTransparency)
         if d.integer(forKey: "compactOverlayVersion") < 1 {
             if d.object(forKey: "overlayWidth") == nil || d.double(forKey: "overlayWidth") == 640 { d.set(520.0, forKey: "overlayWidth") }
             d.set(1, forKey: "compactOverlayVersion")
@@ -93,6 +98,13 @@ final class Preferences {
         preferWordTiming = d.object(forKey: "preferWordTiming") as? Bool ?? true
         strictLyricsMatching = d.object(forKey: "strictLyricsMatching") as? Bool ?? true
         directory = CacheLocation.resolve()
+        // Migrate once. Future launches must prefer the user's new setting.
+        if d.string(forKey: "overlayAppearance") != overlayAppearance.rawValue {
+            d.set(overlayAppearance.rawValue, forKey: "overlayAppearance")
+        }
+        if savedTransparency != overlayTransparency {
+            d.set(overlayTransparency, forKey: "overlayTransparency")
+        }
     }
     private func save(_ key: String, _ value: Any) { defaults.set(value, forKey: key) }
     func setSource(_ name: String, enabled: Bool) {

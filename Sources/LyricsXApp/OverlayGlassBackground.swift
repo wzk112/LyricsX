@@ -1,90 +1,80 @@
 import AppKit
 import QuartzCore
 
-/// A single glass silhouette with a dark crown that opens into clear glass.
-/// Decoration stays on native layers, independently of the lyric render clock.
+/// A single native material with a contrast gradient in its supported content
+/// view. No synthetic rim or per-frame decoration competes with the lyrics.
 @MainActor
 final class OverlayGlassBackground: NSView {
     private let glass = NSGlassEffectView()
-    private let shade = CAGradientLayer()
-    private let glassMask = CALayer()
-    private let rim = CAShapeLayer()
+    private let scrim = OverlayGradientView()
     private var configuration: Configuration?
 
     private struct Configuration: Equatable {
-        let strength: Double
+        let appearance: OverlayAppearance
+        let transparency: Double
         let reduceTransparency: Bool
     }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
-        shade.startPoint = CGPoint(x: 0.5, y: 1)
-        shade.endPoint = CGPoint(x: 0.5, y: 0)
-        shade.locations = [0, 0.38, 0.76, 1]
-        shade.cornerRadius = 23.5
-        shade.cornerCurve = .continuous
-        shade.masksToBounds = true
-        layer?.addSublayer(shade)
-
-        glass.style = .clear
-        glass.tintColor = nil
+        layer?.cornerRadius = 24
+        layer?.cornerCurve = .continuous
         glass.cornerRadius = 24
         glass.frame = bounds
         glass.autoresizingMask = [.width, .height]
-        glass.wantsLayer = true
-        // Keep the full native refraction at the rim, but mix only a small
-        // amount of its blur into the centre. Lowering the entire glass's alpha
-        // would also erase the very edge that makes it look like glass.
-        glassMask.backgroundColor = NSColor.white.withAlphaComponent(0.18).cgColor
-        rim.fillColor = nil
-        rim.strokeColor = NSColor.white.cgColor
-        rim.lineWidth = 2
-        rim.shadowColor = NSColor.white.cgColor
-        rim.shadowOpacity = 1
-        rim.shadowRadius = 3
-        rim.shadowOffset = .zero
-        glassMask.addSublayer(rim)
-        glass.layer?.mask = glassMask
+        // The foreground stays white regardless of the desktop appearance.
+        glass.appearance = NSAppearance(named: .darkAqua)
+        glass.tintColor = nil
+        scrim.wantsLayer = true
+        glass.contentView = scrim
         addSubview(glass)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
-    func configure(strength: Double, reduceTransparency: Bool) {
-        let next = Configuration(strength: strength.isFinite ? min(0.28, max(0, strength)) : 0,
+    func configure(appearance: OverlayAppearance, transparency: Double, reduceTransparency: Bool, reduceMotion: Bool) {
+        let next = Configuration(appearance: appearance,
+                                 transparency: OverlayAppearance.clampedTransparency(transparency),
                                  reduceTransparency: reduceTransparency)
-        guard configuration != next else { return }
+        guard configuration != next, let gradient = scrim.layer as? CAGradientLayer else { return }
+        let animate = configuration != nil && configuration?.appearance != appearance
+            && !reduceMotion && !reduceTransparency
+        let previousColors = gradient.presentation()?.colors ?? gradient.colors
         configuration = next
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        let s = next.strength
-        shade.colors = reduceTransparency
-            ? Array(repeating: NSColor(white: 0.12, alpha: 1).cgColor, count: 4)
-            : [0.72 + s * 0.5, 0.38 + s * 0.7, 0.06 + s * 0.4, s * 0.12]
-                .map { NSColor.black.withAlphaComponent($0).cgColor }
-        // Accessibility remains opaque; it must not be bypassed by our gradient.
+        // .regular softens the backdrop more for reading; .clear keeps its
+        // texture and refraction. Tint color is not an opacity control.
+        glass.style = appearance == .glass ? .clear : .regular
         glass.isHidden = reduceTransparency
+        layer?.backgroundColor = reduceTransparency ? NSColor(white: 0.12, alpha: 1).cgColor : nil
+        gradient.colors = appearance.shadeOpacities(transparency: next.transparency)
+            .map { NSColor.black.withAlphaComponent($0).cgColor }
         CATransaction.commit()
+        gradient.removeAnimation(forKey: "appearance")
+        if animate, let previousColors {
+            let transition = CABasicAnimation(keyPath: "colors")
+            transition.fromValue = previousColors
+            transition.toValue = gradient.colors
+            transition.duration = 0.24
+            transition.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 0, 0.2, 1)
+            gradient.add(transition, forKey: "appearance")
+        }
     }
+}
 
-    override func layout() {
-        super.layout()
-        // Resize only these layers with the panel, without rebuilding its content
-        // or starting a second animation that trails behind the native frame.
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        // The dimming layer sits behind the native glass and slightly inside its
-        // continuous corners, so it cannot paint over the refractive top rim.
-        shade.frame = bounds.insetBy(dx: 0.5, dy: 0.5)
-        glassMask.frame = bounds
-        rim.frame = bounds
-        let edge = CGPath(roundedRect: bounds.insetBy(dx: 1, dy: 1),
-                          cornerWidth: 23, cornerHeight: 23, transform: nil)
-        rim.path = edge
-        rim.shadowPath = edge.copy(strokingWithWidth: rim.lineWidth, lineCap: .round, lineJoin: .round, miterLimit: 0)
-        CATransaction.commit()
+/// AppKit resizes this backing gradient with the material's content view.
+@MainActor private final class OverlayGradientView: NSView {
+    override func makeBackingLayer() -> CALayer {
+        let gradient = CAGradientLayer()
+        gradient.startPoint = CGPoint(x: 0.5, y: 1)
+        gradient.endPoint = CGPoint(x: 0.5, y: 0)
+        gradient.locations = [0, 0.38, 0.76, 1]
+        gradient.cornerRadius = 24
+        gradient.cornerCurve = .continuous
+        gradient.masksToBounds = true
+        return gradient
     }
 }

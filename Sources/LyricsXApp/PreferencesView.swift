@@ -150,11 +150,14 @@ struct PreferencesView: View {
                 SettingToggle(title: "鼠标经过时隐藏", detail: "锁定后，鼠标经过歌词会暂时隐藏内容，离开后恢复。", value: $p.hideOverlayOnHover)
                 SettingToggle(title: "暂停时隐藏", detail: "暂停音乐时隐藏悬浮窗，继续播放后恢复。", value: $p.hideWhenPaused)
             }
-            SettingsCard(title: "尺寸与玻璃背景") {
+            SettingsCard(title: "外观") {
+                OverlayAppearancePicker(selection: $p.overlayAppearance, transparency: p.overlayTransparency)
+                SettingSlider(title: "透明度", detail: "数值越高越通透，越低越容易看清歌词；图例与悬浮窗同步变化。", impact: "范围 20–80%。高透明度在浅色或复杂背景上会降低对比度；可选择磨砂阅读。系统“降低透明度”开启时使用实色背景。", value: $p.overlayTransparency, range: OverlayAppearance.transparencyRange, step: 0.02, suffix: "%", multiplier: 100)
+            }
+            SettingsCard(title: "尺寸") {
                 SettingToggle(title: "自动调整高度", detail: "宽度固定，只随当前歌词换行调整高度；顶部位置保持不变。", value: $p.overlayAdaptiveSize)
                 SettingSlider(title: "窗口宽度", detail: p.overlayAdaptiveSize ? "当前固定为 \(Int(p.overlayLayoutWidth)) pt。关闭自动高度后可手动修改。" : "同时调整歌词与歌曲信息卡片的可用宽度。", value: $p.overlayWidth, range: 320...1000, step: 20)
                     .disabled(p.overlayAdaptiveSize)
-                SettingSlider(title: "背景浓度", detail: "调节从顶部深色到底部通透的玻璃渐变，帮助文字在复杂背景上保持清晰。", impact: "浓度越低越通透；开启系统“降低透明度”时使用实色背景。", value: $p.overlayBackgroundStrength, range: 0...0.28, step: 0.02, suffix: "%", multiplier: 100)
             }
         }
     }

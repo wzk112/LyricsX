@@ -192,8 +192,9 @@ final class OverlayController: NSObject, NSWindowDelegate {
         panel.contentDragEnabled = !prefs.overlayLocked && !prefs.overlayClickThrough
         if panel.ignoresMouseEvents != prefs.overlayClickThrough { panel.ignoresMouseEvents = prefs.overlayClickThrough }
         setControlsDetached(prefs.overlayClickThrough)
-        background.configure(strength: prefs.overlayBackgroundStrength,
-                             reduceTransparency: NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency)
+        background.configure(appearance: prefs.overlayAppearance, transparency: prefs.overlayTransparency,
+                             reduceTransparency: NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency,
+                             reduceMotion: prefs.reduceMotion || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
         updateSizing()
         let needsHoverTracking = visible
         if needsHoverTracking && hoverTimer == nil {
@@ -277,17 +278,18 @@ final class OverlayController: NSObject, NSWindowDelegate {
         guard !stopped, !dragging else { return }
         let p = model.preferences
         let maximum = p.overlayLayoutWidth
-        let compact = model.overlayUsesCompactPresentation
+        let mode = model.overlayPresentationMode
         // No observation of the 60 Hz clock: only a line/setting change can
         // request a new size. Retarget native animation immediately in either direction.
         let document = model.session.document
         let index = model.session.currentLineIndex
         let configuration = [maximum, p.fontSize, p.translationFontSize,
             p.nextLineFontSize, Double(OverlaySecondaryMode.allCases.firstIndex(of: p.overlaySecondaryMode) ?? 0),
-            p.overlayAdaptiveSize ? 1 : 0, compact ? 1 : 0, p.showTranslation ? 1 : 0]
+            p.overlayAdaptiveSize ? 1 : 0, Double(mode.rawValue), p.showTranslation ? 1 : 0]
         let changed = configuration != lastSizingConfiguration
         if changed || document?.id != sizingDocument || index != sizingIndex || p.conversion != sizingConversion {
-            if compact { desiredSize = NSSize(width: maximum, height: OverlaySongCardLayout(width: maximum).height) }
+            if mode == .waiting { desiredSize = NSSize(width: maximum, height: OverlayPresentationMode.waitingHeight) }
+            else if mode == .song { desiredSize = NSSize(width: maximum, height: OverlaySongCardLayout(width: maximum).height) }
             else if p.overlayAdaptiveSize, let document, let index {
                 desiredSize = OverlayTextMeasure.desiredSize(document: document, index: index, preferences: p, maximumWidth: maximum)
             } else { desiredSize = NSSize(width: maximum, height: OverlayLayoutMetrics.height(preferences: p)) }
@@ -399,7 +401,15 @@ struct OverlayView: View {
         let height = presentationHeight(maximum: maximum, display: display)
         let transition = contentTransition(display: display)
         VStack(spacing: 0) {
-            if compact {
+            if display.mode == .waiting {
+                songHeader(display: display)
+                Spacer(minLength: 4)
+                HStack(spacing: 6) {
+                    ForEach(0..<3) { _ in Circle().fill(.white.opacity(0.94)).frame(width: 5, height: 5) }
+                }.shadow(color: .black.opacity(0.85), radius: 2, y: 1)
+                    .accessibilityElement(children: .ignore).accessibilityLabel("等待歌词")
+                Spacer(minLength: 10)
+            } else if compact {
                 HStack(spacing: card.spacing) {
                     Group {
                         if let artwork = display.artwork {
@@ -411,20 +421,13 @@ struct OverlayView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(display.track?.title ?? "LyricsX")
                             .font(.system(size: card.title, weight: .semibold)).lineLimit(2).minimumScaleFactor(0.85)
-                        if display.searching {
-                            Text("正在加载歌词…").font(.system(size: card.artist, weight: .medium)).opacity(0.8)
-                        } else if let artist = display.track?.artist, !artist.isEmpty {
+                        if let artist = display.track?.artist, !artist.isEmpty {
                             Text(artist).font(.system(size: card.artist, weight: .medium)).lineLimit(1).opacity(0.8)
                         }
                     }.shadow(color: .black.opacity(0.8), radius: 2, y: 1)
                 }.frame(maxWidth: card.contentWidth, alignment: .center)
             } else {
-                HStack(spacing: 6) {
-                    Text(display.track?.title ?? "LyricsX").lineLimit(1)
-                    if let artist = display.track?.artist, !artist.isEmpty { Text("· " + artist).lineLimit(1).opacity(0.85) }
-                    Spacer(minLength: 4)
-                    Color.clear.frame(width: 126, height: 30)
-                }.font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.92)).frame(width: max(260, viewport.width - 60), height: 30)
+                songHeader(display: display)
                 Spacer(minLength: 4)
                 ZStack {
                     if let doc = display.document, let index = display.index {
@@ -443,18 +446,28 @@ struct OverlayView: View {
         }.padding(.horizontal, 24).padding(.vertical, 12)
             .foregroundStyle(.white)
             .padding(6)
-            .frame(width: maximum, height: compact ? card.height : height)
+            .frame(width: maximum, height: display.mode == .waiting ? OverlayPresentationMode.waitingHeight : compact ? card.height : height)
             .modifier(transition)
             .compositingGroup()
             .hdrDisplayScope(requested: model.preferences.lyricEmphasis.usesHDR)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .background(WindowVisibilityReader { windowVisible = $0 }.frame(width: 0, height: 0))
     }
+    private func songHeader(display: OverlayDisplaySnapshot) -> some View {
+        HStack(spacing: 6) {
+            Text(display.track?.title ?? "LyricsX").lineLimit(1)
+            if let artist = display.track?.artist, !artist.isEmpty { Text("· " + artist).lineLimit(1).opacity(0.85) }
+            Spacer(minLength: 4)
+            Color.clear.frame(width: 126, height: 30)
+        }.font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.92))
+            .shadow(color: .black.opacity(0.6), radius: 1, y: 1)
+            .frame(width: max(260, viewport.width - 60), height: 30)
+    }
     private func contentTransition(display: OverlayDisplaySnapshot) -> OverlayContentTransition {
         let p = model.preferences, compact = display.compact
         let identity = OverlayContentIdentity(track: display.track?.id,
-            primary: compact ? (display.searching ? "正在加载歌词…" : display.track?.artist ?? "") : placeholder,
-            compact: compact, artwork: compact ? display.artwork.map(ObjectIdentifier.init) : nil)
+            primary: display.mode == .waiting ? "•••" : compact ? display.track?.artist ?? "" : placeholder,
+            compact: compact, artwork: display.mode == .song ? display.artwork.map(ObjectIdentifier.init) : nil)
         return OverlayContentTransition(identity: identity.songScope,
             reduced: reduceMotion || p.reduceMotion, visible: windowVisible, preparingSince: presentation?.preparingSince)
     }
@@ -492,7 +505,7 @@ private struct OverlayControlStrip: View {
         .padding(2)
         // A minimum local scrim keeps white controls legible over white pages.
         // Keep this independent from the user's much lighter lyric glass tint.
-        .background(reduceTransparency ? Color(white: 0.16) : .black.opacity(max(0.52, model.preferences.overlayBackgroundStrength)), in: .capsule)
+        .background(reduceTransparency ? Color(white: 0.16) : .black.opacity(max(0.52, 1 - model.preferences.overlayTransparency)), in: .capsule)
         .glassEffect(.clear, in: .capsule)
         .overlay { Capsule().strokeBorder(.white.opacity(0.16), lineWidth: 0.5).allowsHitTesting(false) }
     }

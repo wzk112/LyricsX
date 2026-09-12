@@ -2,6 +2,11 @@ import AppKit
 import Observation
 import LyricsXCore
 
+enum OverlayPresentationMode: Int {
+    case lyrics, waiting, song
+    static let waitingHeight = 96.0
+}
+
 /// A short handover owns a coherent old frame, never a mix of the new title
 /// and the previous song's lyrics. No player or cache state is modified.
 struct OverlayDisplaySnapshot {
@@ -9,7 +14,8 @@ struct OverlayDisplaySnapshot {
     let document: LyricsDocument?
     let index: Int?
     let artwork: NSImage?
-    let compact: Bool
+    let mode: OverlayPresentationMode
+    var compact: Bool { mode != .lyrics }
     let searching: Bool
     var position: Double
     var playing: Bool
@@ -18,7 +24,7 @@ struct OverlayDisplaySnapshot {
     @MainActor init(model: AppModel, at now: Double) {
         track = model.session.track; document = model.session.document
         index = model.session.currentLineIndex; artwork = model.artwork
-        compact = model.overlayUsesCompactPresentation; searching = model.session.isSearching
+        mode = model.overlayPresentationMode; searching = model.session.isSearching
         position = model.session.presentationPosition(at: now)
         playing = model.session.isPlaying; sampledAt = now
     }

@@ -225,7 +225,7 @@ private let overlayLyrics = LyricsDocument(title: "Overlay Song", artist: "Artis
         defer { defaults.removePersistentDomain(forName: suite) }
         let prefs = Preferences(defaults: defaults)
         prefs.overlayVisible = true; prefs.hideWhenPaused = false; prefs.hideOverlayOnHover = false
-        prefs.reduceMotion = true; prefs.overlayBackgroundStrength = 0.14
+        prefs.reduceMotion = true; prefs.overlayTransparency = 0.6
         let model = AppModel(repository: EmptyRepository(), preferences: prefs)
         model.session.accept(.init(track: overlayTrack, position: 1, isPlaying: false), shouldSearch: false)
         model.session.use(LyricsDocument(title: overlayTrack.title, artist: overlayTrack.artist,
@@ -240,7 +240,12 @@ private let overlayLyrics = LyricsDocument(title: "Overlay Song", artist: "Artis
         overlay.panel.onDragActivity?(true)
         let directory = try #require(ProcessInfo.processInfo.environment["LYRICSX_CONTROL_QA"])
         try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
-        for surface in ["light", "dark", "color"] {
+        let examples = OverlayAppearance.allCases.flatMap { appearance in
+            ["light", "dark", "color"].map { (appearance, $0, 0.6) } + [(appearance, "light", 0.2), (appearance, "light", 0.8)]
+        }
+        for (appearance, surface, transparency) in examples {
+            prefs.overlayAppearance = appearance
+            prefs.overlayTransparency = transparency
             let dark = surface == "dark"
             backdrop.backgroundColor = dark ? NSColor(white: 0.04, alpha: 1) : .white
             let scene = NSView(frame: NSRect(origin: .zero, size: backdrop.frame.size))
@@ -267,7 +272,7 @@ private let overlayLyrics = LyricsDocument(title: "Overlay Song", artist: "Artis
                 try await Task.sleep(for: .milliseconds(250))
                 let window = detached ? overlay.controlPanel : overlay.panel
                 let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-                let name = "controls-\(surface)-\(detached ? "detached" : "inline").png"
+                let name = "controls-\(appearance.rawValue)-\(surface)-\(Int((transparency * 100).rounded()))-\(detached ? "detached" : "inline").png"
                 // Capture the compositor result, not an isolated window image:
                 // window-only capture can replace behind-window glass with grey.
                 let frame = window.frame
@@ -320,12 +325,37 @@ private let overlayLyrics = LyricsDocument(title: "Overlay Song", artist: "Artis
         model.stop()
     }
 
+    @Test func legacyMaterialSettingsMigrateOnceAndRespectNewTransparency() throws {
+        let suite = "LyricsXTests-" + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        for (oldStyle, expectedStyle) in [("native", OverlayAppearance.glass), ("glass", .glass), ("dark", .frosted)] {
+            defaults.removePersistentDomain(forName: suite)
+            defaults.set(oldStyle, forKey: "overlayAppearance")
+            defaults.set(0.28, forKey: "overlayBackgroundStrength")
+            let migrated = Preferences(defaults: defaults)
+            #expect(migrated.overlayAppearance == expectedStyle)
+            #expect(abs(migrated.overlayTransparency - 0.72) < 0.001)
+            migrated.overlayTransparency = 0.42
+            let restored = Preferences(defaults: defaults)
+            #expect(restored.overlayAppearance == expectedStyle)
+            #expect(restored.overlayTransparency == 0.42)
+        }
+        defaults.set(0.95, forKey: "overlayTransparency")
+        #expect(Preferences(defaults: defaults).overlayTransparency == 0.8)
+        defaults.set(-0.5, forKey: "overlayTransparency")
+        #expect(Preferences(defaults: defaults).overlayTransparency == 0.2)
+    }
+
     @Test func menuAndOverlayPreferencesSurviveRelaunch() throws {
         let suite = "LyricsXTests-" + UUID().uuidString
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let prefs = Preferences(defaults: defaults)
         prefs.showMenuBarIcon = false
+        #expect(prefs.overlayAppearance == .glass)
+        prefs.overlayAppearance = .frosted
+        prefs.overlayTransparency = 0.34
         prefs.showDockIcon = false
         prefs.showMenubarLyrics = true
         prefs.combinedMenubarLyrics = false
@@ -340,6 +370,7 @@ private let overlayLyrics = LyricsDocument(title: "Overlay Song", artist: "Artis
         prefs.preferWordTiming = false
         prefs.strictLyricsMatching = false
         let restored = Preferences(defaults: defaults)
+        #expect(restored.overlayAppearance == .frosted && restored.overlayTransparency == 0.34)
         let liveConfiguration = prefs.sourceConfigurationReader.read()
         #expect(liveConfiguration.sourceOrder == prefs.sourceOrder)
         #expect(!liveConfiguration.preferBilingual && !liveConfiguration.preferWordTiming && !liveConfiguration.strictMatching)

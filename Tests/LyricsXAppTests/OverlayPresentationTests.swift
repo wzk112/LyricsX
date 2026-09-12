@@ -9,7 +9,7 @@ private struct PendingOverlayRepository: LyricsRepository {
     func save(_ document: LyricsDocument, for track: Track) async throws {}
 }
 
-private func whiteInkBounds(_ bitmap: NSBitmapImageRep) throws -> CGRect {
+private func whiteInkBounds(_ bitmap: NSBitmapImageRep, columns: Range<Int>? = nil) throws -> CGRect {
     let image = try #require(bitmap.cgImage)
     let context = try #require(CGContext(data: nil, width: bitmap.pixelsWide, height: bitmap.pixelsHigh,
         bitsPerComponent: 8, bytesPerRow: bitmap.pixelsWide * 4, space: CGColorSpaceCreateDeviceRGB(),
@@ -18,7 +18,7 @@ private func whiteInkBounds(_ bitmap: NSBitmapImageRep) throws -> CGRect {
     let bytes = try #require(context.data).assumingMemoryBound(to: UInt8.self)
     var left = bitmap.pixelsWide, right = 0, top = bitmap.pixelsHigh, bottom = 0
     for y in 0..<bitmap.pixelsHigh {
-        for x in 0..<bitmap.pixelsWide {
+        for x in columns ?? 0..<bitmap.pixelsWide {
             // Convert extended-range output once, not one NSColor per pixel.
             if bytes[y * context.bytesPerRow + x * 4 + 1] > 127 {
                 left = min(left, x); right = max(right, x); top = min(top, y); bottom = max(bottom, y)
@@ -77,7 +77,7 @@ private func whiteInkBounds(_ bitmap: NSBitmapImageRep) throws -> CGRect {
         }
     }
 
-    @Test func introEmptyLinesAndDotPlaceholdersUseTheCompactCard() throws {
+    @Test func introEmptyLinesAndDotPlaceholdersUseWaitingDots() throws {
         try fixture { model in
             let document = LyricsDocument(lines: [.init(id: 0, time: 5, text: "A real lyric"),
                 .init(id: 1, time: 10, text: ""), .init(id: 2, time: 15, text: " ••• "),
@@ -85,13 +85,68 @@ private func whiteInkBounds(_ bitmap: NSBitmapImageRep) throws -> CGRect {
             model.session.use(document, persist: false)
             for time in [0.0, 10, 15, 20] {
                 model.session.seek(to: time)
-                #expect(model.overlayUsesCompactPresentation)
+                #expect(model.overlayPresentationMode == .waiting)
             }
             for time in [5.0, 25] {
                 model.session.seek(to: time)
-                #expect(!model.overlayUsesCompactPresentation)
+                #expect(model.overlayPresentationMode == .lyrics)
             }
         }
+    }
+
+    @Test func waitingKeepsItsHeaderAndRendersDotsWithoutTheArtworkCard() throws {
+        try fixture { model in
+            model.preferences.reduceMotion = true
+            model.session.use(.init(lines: [.init(id: 0, time: 20, text: "Later lyric")]), persist: false)
+            model.artwork = NSImage(size: .init(width: 64, height: 64), flipped: false) { rect in
+                NSColor.white.setFill(); rect.fill(); return true
+            }
+            for width in [320.0, 620, 1000] {
+                model.preferences.overlayWidth = width
+                let height = OverlayPresentationMode.waitingHeight
+                let renderer = ImageRenderer(content: OverlayView(model: model, viewport: .init(width: width))
+                    .frame(width: width, height: height).background(.black))
+                renderer.scale = 1
+                let bitmap = NSBitmapImageRep(cgImage: try #require(renderer.cgImage))
+                let ink = try whiteInkBounds(bitmap, columns: (Int(width / 2) - 20)..<(Int(width / 2) + 20))
+                #expect(ink.width > 20 && ink.width < 35 && ink.height <= 6)
+                #expect(abs(ink.midX - width / 2) <= 2)
+                let allInk = try whiteInkBounds(bitmap)
+                #expect(allInk.minX >= 24 && allInk.minX < 60 && allInk.width > width / 3)
+            }
+            model.session.use(.init(plainText: "Instrumental"), persist: false)
+            #expect(model.overlayPresentationMode == .song)
+        }
+    }
+
+    @Test func waitingLoadingAndFinishedSearchResizeAtTheSameTopWithoutReplacingTheHost() async throws {
+        _ = NSApplication.shared
+        let suite = "LyricsXTests-" + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let prefs = Preferences(defaults: defaults)
+        prefs.reduceMotion = true; prefs.hideWhenPaused = false
+        let model = AppModel(repository: PendingOverlayRepository(), preferences: prefs)
+        defer { model.stop() }
+        model.session.accept(.init(track: .init(playerID: "test", playerName: "Test", title: "Waiting"), position: 0, isPlaying: false))
+        #expect(model.overlayPresentationMode == .waiting && model.session.isSearching)
+        let overlay = OverlayController(model: model, frameAutosaveName: nil)
+        defer { overlay.stop() }
+        let top = overlay.panel.frame.maxY, width = overlay.panel.frame.width
+        let host = overlay.lyricHostingView
+        #expect(abs(overlay.panel.frame.height - OverlayPresentationMode.waitingHeight) < 0.5)
+        model.session.use(.init(lines: [.init(id: 0, time: 0, text: "Visible lyric"),
+                                       .init(id: 1, time: 5, text: ""), .init(id: 2, time: 8, text: "Next lyric")]), persist: false)
+        try await Task.sleep(for: .milliseconds(30))
+        #expect(model.overlayPresentationMode == .lyrics && overlay.panel.frame.height > OverlayPresentationMode.waitingHeight)
+        model.session.seek(to: 5)
+        try await Task.sleep(for: .milliseconds(30))
+        #expect(model.overlayPresentationMode == .waiting && abs(overlay.panel.frame.height - OverlayPresentationMode.waitingHeight) < 0.5)
+        model.session.suppressLyrics()
+        try await Task.sleep(for: .milliseconds(30))
+        #expect(model.overlayPresentationMode == .song)
+        #expect(abs(overlay.panel.frame.height - OverlaySongCardLayout(width: width).height) < 0.5)
+        #expect(abs(overlay.panel.frame.maxY - top) < 0.5 && abs(overlay.panel.frame.width - width) < 0.5 && overlay.lyricHostingView === host)
     }
 
     @Test func hiddenMainSelectionFreezesWhilePlaybackAndOverlayContinue() throws {

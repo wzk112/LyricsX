@@ -55,13 +55,14 @@ final class AppModel {
         }
     }
     private static let gapCharacters = CharacterSet(charactersIn: ".·•…⋯・。 \t\n")
-    var overlayUsesCompactPresentation: Bool {
-        guard let document = session.document else { return true }
-        guard document.isSynced, !session.documentIsPlaceholder,
-              let index = session.currentLineIndex, document.lines.indices.contains(index) else { return true }
+    var overlayPresentationMode: OverlayPresentationMode {
+        guard let document = session.document else { return session.isSearching && !lyricsBlocked ? .waiting : .song }
+        guard document.isSynced, !document.isInstrumental, !session.documentIsPlaceholder else { return .song }
+        guard let index = session.currentLineIndex, document.lines.indices.contains(index) else { return .waiting }
         let text = document.lines[index].text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return text.isEmpty || text.unicodeScalars.allSatisfy(Self.gapCharacters.contains)
+        return text.isEmpty || text.unicodeScalars.allSatisfy(Self.gapCharacters.contains) ? .waiting : .lyrics
     }
+    var overlayUsesCompactPresentation: Bool { overlayPresentationMode != .lyrics }
     func updateMainLyricSelection() {
         guard mainWindowVisible else { return }
         if mainLyricIndex != session.currentLineIndex { mainLyricIndex = session.currentLineIndex }
