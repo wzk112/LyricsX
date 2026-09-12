@@ -154,7 +154,7 @@ struct PreferencesView: View {
                 SettingToggle(title: "自动调整高度", detail: "宽度固定，只随当前歌词换行调整高度；顶部位置保持不变。", value: $p.overlayAdaptiveSize)
                 SettingSlider(title: "窗口宽度", detail: p.overlayAdaptiveSize ? "当前固定为 \(Int(p.overlayLayoutWidth)) pt。关闭自动高度后可手动修改。" : "同时调整歌词与歌曲信息卡片的可用宽度。", value: $p.overlayWidth, range: 320...1000, step: 20)
                     .disabled(p.overlayAdaptiveSize)
-                SettingSlider(title: "背景浓度", detail: "增加玻璃后的暗色遮罩，帮助文字在复杂背景上保持清晰。", impact: "浓度越低越通透，也越容易受后方内容影响。", value: $p.overlayBackgroundStrength, range: 0...0.28, step: 0.02, suffix: "%", multiplier: 100)
+                SettingSlider(title: "背景浓度", detail: "调节从顶部深色到底部通透的玻璃渐变，帮助文字在复杂背景上保持清晰。", impact: "浓度越低越通透；开启系统“降低透明度”时使用实色背景。", value: $p.overlayBackgroundStrength, range: 0...0.28, step: 0.02, suffix: "%", multiplier: 100)
             }
         }
     }

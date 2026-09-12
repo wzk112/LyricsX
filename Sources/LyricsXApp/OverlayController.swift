@@ -27,11 +27,9 @@ final class DraggableOverlayPanel: NSPanel {
 final class OverlayController: NSObject, NSWindowDelegate {
     let panel: DraggableOverlayPanel
     let controlPanel: NSPanel
-    private let backdrop = NSVisualEffectView()
-    private let glass = NSGlassEffectView()
+    private let background = OverlayGlassBackground()
     private let content: NSHostingView<OverlayView>
     private let root = NSView()
-    private let tint = NSView()
     private let viewport: OverlayViewport
     private let presentation = OverlayPresentation()
     private let controls: NSHostingView<OverlayControlStrip>
@@ -100,36 +98,14 @@ final class OverlayController: NSObject, NSWindowDelegate {
             if !dragging { self.saveFrame(); self.updateSizing() }
         }
         root.frame = NSRect(origin: .zero, size: panel.frame.size)
-        // Blur the desktop itself, not the lyric foreground. Both materials share
-        // one silhouette; only the native glass draws the refractive edge.
-        backdrop.material = .underWindowBackground
-        backdrop.blendingMode = .behindWindow
-        backdrop.state = .active
-        backdrop.appearance = NSAppearance(named: .darkAqua)
-        backdrop.alphaValue = 0.55
-        backdrop.wantsLayer = true
-        backdrop.layer?.cornerRadius = 24
-        backdrop.layer?.masksToBounds = true
-        backdrop.frame = root.bounds.insetBy(dx: 6, dy: 6)
-        backdrop.autoresizingMask = [.width, .height]
-        glass.style = .clear
-        glass.tintColor = nil
-        glass.cornerRadius = 24
-        glass.alphaValue = 1
-        glass.frame = root.bounds.insetBy(dx: 6, dy: 6)
-        glass.autoresizingMask = [.width, .height]
+        background.frame = root.bounds.insetBy(dx: 6, dy: 6)
+        background.autoresizingMask = [.width, .height]
         content.frame = root.bounds
         content.autoresizingMask = []
         content.sizingOptions = []
         content.wantsLayer = true
         content.layer?.backgroundColor = NSColor.clear.cgColor
-        root.addSubview(backdrop)
-        root.addSubview(glass)
-        tint.wantsLayer = true
-        tint.layer?.cornerRadius = 24
-        tint.frame = root.bounds.insetBy(dx: 6, dy: 6)
-        tint.autoresizingMask = [.width, .height]
-        root.addSubview(tint)
+        root.addSubview(background)
         root.addSubview(content)
         panel.contentView = root
         // Draggable lyrics and controls share a single window/render surface.
@@ -216,8 +192,8 @@ final class OverlayController: NSObject, NSWindowDelegate {
         panel.contentDragEnabled = !prefs.overlayLocked && !prefs.overlayClickThrough
         if panel.ignoresMouseEvents != prefs.overlayClickThrough { panel.ignoresMouseEvents = prefs.overlayClickThrough }
         setControlsDetached(prefs.overlayClickThrough)
-        tint.layer?.backgroundColor = (NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
-            ? NSColor(white: 0.12, alpha: 1) : NSColor.black.withAlphaComponent(prefs.overlayBackgroundStrength)).cgColor
+        background.configure(strength: prefs.overlayBackgroundStrength,
+                             reduceTransparency: NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency)
         updateSizing()
         let needsHoverTracking = visible
         if needsHoverTracking && hoverTimer == nil {
@@ -242,9 +218,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = prefs.reduceMotion ? 0 : 0.16
                 content.animator().alphaValue = hidden ? 0 : 1
-                tint.animator().alphaValue = hidden ? 0 : 1
-                backdrop.animator().alphaValue = hidden ? 0 : 0.55
-                glass.animator().alphaValue = hidden ? 0 : 1
+                background.animator().alphaValue = hidden ? 0 : 1
             }
         }
         let showControls = lastVisible && (inside || dragging)
