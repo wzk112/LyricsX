@@ -45,6 +45,53 @@ private struct SizingRepository: LyricsRepository {
     func save(_ document: LyricsDocument, for track: Track) async throws {}
 }
 
+@MainActor @Test func overlayFrameRatePreferencePreservesTheUsersChoice() throws {
+    let suite = "LyricsXTests-" + UUID().uuidString
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let prefs = Preferences(defaults: defaults)
+    #expect(prefs.overlayFrameRate == .display)
+    prefs.overlayFrameRate = .sixty
+    #expect(Preferences(defaults: defaults).overlayFrameRate.limit == 60)
+    defaults.set("invalid", forKey: "overlayFrameRate")
+    #expect(Preferences(defaults: defaults).overlayFrameRate == .display)
+}
+
+@MainActor @Test func nativeWaitingHandoverKeepsTheDepartingLyricsInsideTheWindow() async throws {
+    _ = NSApplication.shared
+    let suite = "LyricsXTests-" + UUID().uuidString
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let prefs = Preferences(defaults: defaults)
+    prefs.overlayWidth = 620; prefs.hideWhenPaused = false; prefs.hideOverlayOnHover = false
+    prefs.overlaySecondaryMode = .translation
+    let model = AppModel(repository: SizingRepository(), preferences: prefs)
+    let track = Track(playerID: "test", playerName: "Test", title: "Window sizing fixture")
+    model.session.accept(.init(track: track, position: 1, isPlaying: false), shouldSearch: false)
+    let doc = LyricsDocument(lines: [
+        .init(id: 0, time: 0, text: "A long line\nWith a second row", translation: "A translation"),
+        .init(id: 1, time: 5, text: ""), .init(id: 2, time: 8, text: "Short lyric")])
+    model.session.use(doc, persist: false)
+    let overlay = OverlayController(model: model, frameAutosaveName: nil)
+    defer { overlay.stop(); model.stop() }
+    try await Task.sleep(for: .milliseconds(120))
+    let height = overlay.panel.frame.height
+    let top = overlay.panel.frame.maxY
+    model.session.seek(to: 5)
+    try await Task.sleep(for: .milliseconds(90))
+    if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+        #expect(abs(overlay.panel.frame.height - height) < 1, "The old lyric is still fading out; a waiting-size window clips it")
+    }
+    try await Task.sleep(for: .milliseconds(700))
+    #expect(abs(overlay.panel.frame.height - OverlayPresentationMode.waitingHeight) < 1)
+    #expect(abs(overlay.panel.frame.maxY - top) < 1)
+    model.session.seek(to: 8)
+    try await Task.sleep(for: .milliseconds(500))
+    let lyricHeight = OverlayTextMeasure.height(document: doc, index: 2, preferences: prefs, maximumWidth: 620)
+    #expect(abs(overlay.panel.frame.height - lyricHeight) < 1)
+    #expect(abs(overlay.panel.frame.maxY - top) < 1)
+}
+
 @MainActor @Test func nativeHeightResizeKeepsWidthHostingBoundsAndTopEdge() async throws {
     _ = NSApplication.shared
     let suite = "LyricsXTests-" + UUID().uuidString

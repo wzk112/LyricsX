@@ -26,6 +26,7 @@ final class Preferences {
     }
     var overlayWidth: Double { didSet { save("overlayWidth", overlayWidth) } }
     var overlayAdaptiveSize: Bool { didSet { save("overlayAdaptiveSize", overlayAdaptiveSize) } }
+    var overlayFrameRate: OverlayFrameRate { didSet { save("overlayFrameRate", overlayFrameRate.rawValue) } }
     var fontSize: Double { didSet { save("fontSize", fontSize) } }
     var translationFontSize: Double { didSet { save("translationFontSize", translationFontSize) } }
     var nextLineFontSize: Double { didSet { save("nextLineFontSize", nextLineFontSize) } }
@@ -89,6 +90,7 @@ final class Preferences {
         }
         overlayWidth = d.object(forKey: "overlayWidth") as? Double ?? 620
         overlayAdaptiveSize = d.object(forKey: "overlayAdaptiveSize") as? Bool ?? true
+        overlayFrameRate = OverlayFrameRate(rawValue: d.string(forKey: "overlayFrameRate") ?? "display") ?? .display
         fontSize = d.object(forKey: "fontSize") as? Double ?? 26
         translationFontSize = d.object(forKey: "translationFontSize") as? Double ?? 13
         nextLineFontSize = d.object(forKey: "nextLineFontSize") as? Double ?? 12

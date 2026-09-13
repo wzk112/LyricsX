@@ -68,4 +68,19 @@ import LyricsXCore
         let fast = cue(0, interval: 0.08).plan
         #expect(OverlayMotionFrame.make(time: 0.08, plan: fast, distance: 70, nextScale: 0.5, reduced: false) == .init())
     }
+
+    @Test func untranslatedPreviewPromotesAcrossScriptsAndProviderWhitespace() {
+        for text in ["  Another night in the city  ", "\u{3000}星の光をたどって\u{3000}",
+                     " Une lumière dans la nuit\n", "  별빛을 따라 걸어가 ", "  ضوء في السماء ", "\tСвет над городом "] {
+            let line = LyricLine(id: 1, time: 3, text: text)
+            let preview = OverlaySecondaryMode.either.content(translation: nil, next: text).next
+            let first = OverlayCueSnapshot(document: document, index: 0, line: cue(0).line, text: "First",
+                plan: cue(0).plan, height: 40, fontSize: 26, previewText: preview, previewCenter: 90, previewScale: 0.5)
+            let next = OverlayCueSnapshot(document: document, index: 1, line: line, text: text,
+                plan: cue(1).plan, height: 40, fontSize: 26, previewText: nil, previewCenter: nil, previewScale: 0.5)
+            let state = OverlayCueTransition().updating(to: first, lyricTime: 2.9, at: 10, animated: true)
+                .updating(to: next, lyricTime: 3.05, at: 10.15, animated: true)
+            #expect(state.promotionDistance == 70, "Untranslated preview should promote: \(text)")
+        }
+    }
 }

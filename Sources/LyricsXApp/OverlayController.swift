@@ -285,11 +285,14 @@ final class OverlayController: NSObject, NSWindowDelegate {
         guard !stopped, !dragging else { return }
         let p = model.preferences
         let maximum = p.overlayLayoutWidth
-        let mode = model.overlayPresentationMode
+        // Size the snapshot actually being drawn. During the short handover,
+        // the live session can already be waiting while old lyrics fade out.
+        let display = presentation.held ?? OverlayDisplaySnapshot(model: model, at: ProcessInfo.processInfo.systemUptime)
+        let mode = display.mode
         // No observation of the display clock: only a line/setting change can
         // request a new size. Retarget native animation immediately in either direction.
-        let document = model.session.document
-        let index = model.session.currentLineIndex
+        let document = display.document
+        let index = display.index
         let configuration = [maximum, p.fontSize, p.translationFontSize,
             p.nextLineFontSize, Double(OverlaySecondaryMode.allCases.firstIndex(of: p.overlaySecondaryMode) ?? 0),
             p.overlayAdaptiveSize ? 1 : 0, Double(mode.rawValue), p.showTranslation ? 1 : 0]
@@ -455,8 +458,8 @@ struct OverlayView: View {
             .padding(6)
             .frame(width: maximum, height: display.mode == .waiting ? OverlayPresentationMode.waitingHeight : compact ? card.height : height)
             .modifier(transition)
-            .compositingGroup()
             .hdrDisplayScope(requested: model.preferences.lyricEmphasis.usesHDR)
+            .environment(\.lyricFrameRateLimit, model.preferences.overlayFrameRate.limit)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .background(WindowVisibilityReader { windowVisible = $0 }.frame(width: 0, height: 0))
     }

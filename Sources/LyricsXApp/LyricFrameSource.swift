@@ -2,15 +2,32 @@ import AppKit
 import QuartzCore
 import SwiftUI
 
+enum OverlayFrameRate: String, CaseIterable, Identifiable {
+    case display, sixty
+    var id: String { rawValue }
+    var limit: Int { self == .sixty ? 60 : 0 }
+    var title: String { self == .sixty ? "60 帧" : "跟随屏幕" }
+}
+
+private struct LyricFrameRateLimitKey: EnvironmentKey { static let defaultValue = 0 }
+extension EnvironmentValues {
+    var lyricFrameRateLimit: Int {
+        get { self[LyricFrameRateLimitKey.self] }
+        set { self[LyricFrameRateLimitKey.self] = newValue }
+    }
+}
+
 /// Each lyric surface follows its own window's display link. Common run-loop
 /// modes keep frames eligible while AppKit is tracking a window interaction.
 struct LyricFrameSource: NSViewRepresentable {
     var running: Bool
     var frame: () -> Void
+    @Environment(\.lyricFrameRateLimit) private var frameRateLimit
 
     func makeNSView(context: Context) -> LyricFrameView { LyricFrameView() }
     func updateNSView(_ view: LyricFrameView, context: Context) {
         view.frameCallback = frame
+        view.frameRateLimit = frameRateLimit
         view.running = running
     }
     static func dismantleNSView(_ view: LyricFrameView, coordinator: ()) { view.stop(); view.frameCallback = nil }
@@ -18,6 +35,7 @@ struct LyricFrameSource: NSViewRepresentable {
 
 @MainActor final class LyricFrameView: NSView {
     var frameCallback: (() -> Void)?
+    var frameRateLimit = 0 { didSet { if frameRateLimit != oldValue { updateFrameRate() } } }
     var running = false { didSet { if running != oldValue { updateActivity(nil) } } }
     private var link: CADisplayLink?
     private var activity = WindowRenderActivity()
@@ -69,11 +87,12 @@ struct LyricFrameSource: NSViewRepresentable {
     }
     @objc private func updateFrameRate() {
         guard let link else { return }
-        let maximum = max(1, window?.screen?.maximumFramesPerSecond ?? NSScreen.main?.maximumFramesPerSecond ?? 60)
+        let screenMaximum = max(1, window?.screen?.maximumFramesPerSecond ?? NSScreen.main?.maximumFramesPerSecond ?? 60)
+        let maximum = frameRateLimit > 0 ? min(screenMaximum, frameRateLimit) : screenMaximum
         guard requestedFrameRate != maximum else { return }
         requestedFrameRate = maximum
-        // Request the current display's full cadence. AppKit moves this link
-        // across screens; macOS still applies power and thermal constraints.
+        // A window-scoped limit never exceeds its display. AppKit moves this
+        // link across screens; macOS still applies power/thermal constraints.
         let rate = Float(maximum)
         link.preferredFrameRateRange = CAFrameRateRange(minimum: rate, maximum: rate, preferred: rate)
     }

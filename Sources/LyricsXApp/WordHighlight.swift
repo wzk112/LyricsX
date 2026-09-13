@@ -209,8 +209,8 @@ struct HeldNoteRenderer: TextRenderer {
                         radius: min(9, bounds.height * (options.usesHDR ? 0.19 : 0.24))))
                     bloom.drawLayer { ink in
                         clipReveal(&ink, run: run, progress: progress)
-                        ink.clipToLayer { mask in mask.draw(run) }
-                        ink.fill(Path(bounds.insetBy(dx: -2, dy: -2)), with: .color(white))
+                        if options.usesHDR { ink.addFilter(.colorMultiply(white)) }
+                        ink.draw(run)
                     }
                 }
             }

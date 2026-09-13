@@ -197,6 +197,11 @@ struct PreferencesView: View {
         @Bindable var p = model.preferences
         return Group {
             SettingsCard(title: "动态效果") {
+                SettingRow(title: "悬浮窗帧率", detail: "60 帧减少歌词绘制次数；跟随屏幕使用所在屏幕的最高刷新率。所有动效都会保留。", impact: "高刷新率屏幕下，60 帧的运动细腻度会有所降低。实际 GPU 占用还受玻璃背景与其他窗口影响。") {
+                    Picker("悬浮窗帧率", selection: $p.overlayFrameRate) {
+                        ForEach(OverlayFrameRate.allCases) { Text($0.title).tag($0) }
+                    }.labelsHidden().frame(width: 140)
+                }
                 SettingToggle(title: "减少动态效果", detail: "关闭位移、回弹、模糊和辉光，保留歌词同步提亮。", impact: "也会遵循 macOS 的减少动态效果设置。", value: $p.reduceMotion)
                 SettingToggle(title: "逐字轻微放大", detail: "演唱中的词柔和放大并轻微上浮，未唱部分保持接近原字号。", impact: "需要歌词自带逐字时间；开启动效会增加少量绘制开销。", value: $p.lyricWordLift)
                     .disabled(p.reduceMotion || systemReduceMotion)

@@ -44,7 +44,9 @@ final class OverlayViewport {
     /// shrinking a measured two-row string back into one bottom-aligned row.
     static func layout(_ text: String, font: Double, canvasWidth: Double, tracking: Double = -0.4,
                        weight: NSFont.Weight = .semibold, minimumScale: Double = 0.6) -> TextLayout {
-        let available = max(1, canvasWidth - 8)
+        // Use the same content width as SwiftUI. A conservative inset here
+        // reserves a second row even when the rendered line fits on one.
+        let available = max(1, canvasWidth)
         let key = LayoutKey(text: text, font: font, width: available, tracking: tracking, weight: weight.rawValue, minimumScale: minimumScale)
         if let value = layoutCache[key] { return value }
         func rows(at size: Double) -> Int {

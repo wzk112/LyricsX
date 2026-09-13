@@ -64,7 +64,12 @@ struct OverlayCueTransition {
         guard let current, current.document == cue.document, current.index + 1 == cue.index,
               lyricTime >= cue.line.time, lyricTime - cue.line.time < 0.2,
               cue.plan?.stablePrefixCount == 0 else { return result }
-        if current.previewText == cue.text, let center = current.previewCenter {
+        // The auxiliary policy trims padding from provider text; the primary
+        // retains it so word timing ranges keep their original character offsets.
+        // Compare the displayed content, without language-specific matching.
+        if let preview = current.previewText,
+           preview.trimmingCharacters(in: .whitespacesAndNewlines) == cue.text.trimmingCharacters(in: .whitespacesAndNewlines),
+           let center = current.previewCenter {
             result.promotionDistance = center - cue.height / 2
         }
         // A new cue replaces the sole departing row. Its deadline uses uptime,

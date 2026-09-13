@@ -60,6 +60,11 @@ import LyricsXCore
         #expect(mainCount > 0 && overlayCount > 0)
         #expect(mainFrames.requestedFrameRate == main.screen?.maximumFramesPerSecond)
         #expect(overlayFrames.requestedFrameRate == overlay.screen?.maximumFramesPerSecond)
+        overlayFrames.frameRateLimit = 60
+        #expect(overlayFrames.requestedFrameRate == min(60, overlay.screen?.maximumFramesPerSecond ?? 60))
+        #expect(mainFrames.requestedFrameRate == main.screen?.maximumFramesPerSecond)
+        overlayFrames.frameRateLimit = 0
+        #expect(overlayFrames.requestedFrameRate == overlay.screen?.maximumFramesPerSecond)
         NotificationCenter.default.post(name: NSWindow.didChangeScreenNotification, object: overlay)
         #expect(overlayFrames.requestedFrameRate == overlay.screen?.maximumFramesPerSecond)
         let before = overlayCount

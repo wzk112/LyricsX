@@ -12,8 +12,9 @@ import LyricsXCore
         let prefs = Preferences(defaults: defaults)
         prefs.overlaySecondaryMode = .none; prefs.fontSize = 26
         prefs.lyricGlow = false; prefs.lyricWordLift = false
-        let samples = ["A short line", "When we follow all the stars together we can find our way home", "让晚风带着我们的故事穿过城市的每一条街道和每一个灯火闪耀的夜晚", "Top line\nBottom line"]
-        for width in [260.0, 560, 940] {
+        let samples = ["A short line", "When we follow all the stars together we can find our way home", "让晚风带着我们的故事穿过城市的每一条街道和每一个灯火闪耀的夜晚", "Top line\nBottom line",
+            "Don’t look for me, I’m just a story you’ve been told", "Don’t try to make yourself remember, darling"]
+        for width in [260.0, 552, 560, 568, 940] {
             for text in samples {
                 let doc = LyricsDocument(lines: [.init(id: 0, time: 0, text: text)])
                 let layout = OverlayTextMeasure.primaryLayout(document: doc, index: 0, preferences: prefs, canvasWidth: width)
@@ -30,7 +31,7 @@ import LyricsXCore
                     if ink && !inkBefore { bands.append(y) }
                     inkBefore = ink
                 }
-                #expect(bands.count == layout.rows, "width=\(width), rows=\(layout.rows), bands=\(bands)")
+                #expect(bands.count == layout.rows, "text=\(text), width=\(width), rows=\(layout.rows), bands=\(bands)")
                 #expect((bands.first ?? 100) < 32) // No unused whole line above the ink.
                 #expect(layout.fontSize <= prefs.fontSize && layout.fontSize >= prefs.fontSize * 0.6)
             }
