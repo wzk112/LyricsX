@@ -14,6 +14,11 @@ final class OverlayViewport {
 @MainActor enum OverlayTextMeasure {
     private struct LineKey: Hashable { let document: UUID; let index: Int; let conversion: String; let text: String }
     private static var lineCache: [LineKey: String] = [:]
+    static func invalidateLayoutText(for document: UUID) {
+        // A replacement can change a future incremental suffix while keeping
+        // both the document ID and the currently visible text.
+        lineCache = lineCache.filter { $0.key.document != document }
+    }
     static func layoutText(document: LyricsDocument, index: Int, preferences: Preferences) -> String {
         guard document.lines.indices.contains(index) else { return "" }
         let key = LineKey(document: document.id, index: index, conversion: preferences.conversion, text: document.lines[index].text)

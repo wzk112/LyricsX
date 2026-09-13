@@ -6,10 +6,13 @@ public final class LyricsSession {
     public private(set) var track: Track?
     public private(set) var document: LyricsDocument? {
         didSet {
+            documentRevision &+= 1
             documentHasWordTiming = document?.hasWordTiming == true
             documentIsPlaceholder = document?.isLikelyInstrumentalPlaceholder == true
         }
     }
+    // Candidate upgrades can retain their UUID and active line index.
+    public private(set) var documentRevision: UInt64 = 0
     public private(set) var documentHasWordTiming = false
     public private(set) var documentIsPlaceholder = false
     public private(set) var phase: LyricsPhase = .idle

@@ -51,6 +51,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private var lastSizingConfiguration: [Double] = []
     private var resizeGeneration = 0
     private var sizingDocument: UUID?
+    private var sizingDocumentRevision: UInt64?
     private var sizingIndex: Int?
     private var sizingConversion = ""
     private var desiredSize = NSSize.zero
@@ -330,14 +331,18 @@ final class OverlayController: NSObject, NSWindowDelegate {
         let index = display.index
         let configuration = [maximum, p.fontSize, p.translationFontSize,
             p.nextLineFontSize, Double(OverlaySecondaryMode.allCases.firstIndex(of: p.overlaySecondaryMode) ?? 0),
-            p.overlayAdaptiveSize ? 1 : 0, Double(mode.rawValue), p.showTranslation ? 1 : 0]
+            p.overlayAdaptiveSize ? 1 : 0, Double(mode.rawValue), p.showTranslation ? 1 : 0,
+            p.overlayPrimarySpacing, p.overlaySecondarySpacing]
         let changed = configuration != lastSizingConfiguration
-        if changed || document?.id != sizingDocument || index != sizingIndex || p.conversion != sizingConversion {
+        let replaced = display.documentRevision != sizingDocumentRevision
+        if replaced, let document { OverlayTextMeasure.invalidateLayoutText(for: document.id) }
+        if changed || replaced || document?.id != sizingDocument || index != sizingIndex || p.conversion != sizingConversion {
             if mode == .waiting { desiredSize = NSSize(width: maximum, height: OverlayPresentationMode.waitingHeight) }
             else if mode == .song { desiredSize = NSSize(width: maximum, height: OverlaySongCardLayout(width: maximum).height) }
             else if p.overlayAdaptiveSize, let document, let index {
                 desiredSize = OverlayTextMeasure.desiredSize(document: document, index: index, preferences: p, maximumWidth: maximum)
             } else { desiredSize = NSSize(width: maximum, height: OverlayLayoutMetrics.height(preferences: p)) }
+            sizingDocumentRevision = display.documentRevision
             sizingDocument = document?.id; sizingIndex = index; sizingConversion = p.conversion
         }
         lastSizingConfiguration = configuration

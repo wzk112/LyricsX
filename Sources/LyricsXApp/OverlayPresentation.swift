@@ -12,6 +12,7 @@ enum OverlayPresentationMode: Int {
 struct OverlayDisplaySnapshot {
     let track: Track?
     let document: LyricsDocument?
+    let documentRevision: UInt64
     let index: Int?
     let artwork: NSImage?
     let mode: OverlayPresentationMode
@@ -23,6 +24,7 @@ struct OverlayDisplaySnapshot {
 
     @MainActor init(model: AppModel, at now: Double) {
         track = model.session.track; document = model.session.document
+        documentRevision = model.session.documentRevision
         index = model.session.currentLineIndex; artwork = model.artwork
         mode = model.overlayPresentationMode; searching = model.session.isSearching
         position = model.session.presentationPosition(at: now)

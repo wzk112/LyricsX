@@ -159,3 +159,85 @@ private struct SizingRepository: LyricsRepository {
     #expect(abs(overlay.panel.frame.maxY - movedTop) <= 1)
     #expect(abs(overlay.panel.frame.height - targetHeight) <= 1)
 }
+
+@MainActor @Test func replacingLyricsResizesBeforeTheNextCueEvenWithTheSameDocumentID() async throws {
+    _ = NSApplication.shared
+    let suite = "LyricsXTests-" + UUID().uuidString
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let prefs = Preferences(defaults: defaults)
+    prefs.overlayWidth = 620; prefs.overlayAdaptiveSize = true
+    prefs.overlaySecondaryMode = .translation; prefs.reduceMotion = true
+    prefs.hideWhenPaused = false; prefs.hideOverlayOnHover = false
+    let model = AppModel(repository: SizingRepository(), preferences: prefs)
+    model.session.accept(.init(track: .init(playerID: "test", playerName: "Test", title: "Replacement fixture"), position: 1, isPlaying: false), shouldSearch: false)
+    let original = LyricsDocument(lines: [.init(id: 0, time: 0, text: "Short"), .init(id: 1, time: 60, text: "Next")])
+    model.session.use(original, persist: false)
+    let overlay = OverlayController(model: model, frameAutosaveName: nil)
+    defer { overlay.stop(); model.stop() }
+    let top = overlay.panel.frame.maxY
+    let host = overlay.lyricHostingView
+    var replacement = original
+    replacement.lines[0].text = "A longer lyric\nWith a second row"
+    replacement.lines[0].translation = "第一行翻译\n第二行翻译"
+    let expected = OverlayTextMeasure.height(document: replacement, index: 0, preferences: prefs, maximumWidth: 620)
+    #expect(expected > overlay.panel.frame.height)
+    model.session.use(replacement, persist: false)
+    let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+    while abs(overlay.panel.frame.height - expected) > 1, ContinuousClock.now < deadline {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(model.session.currentLineIndex == 0 && model.session.position == 1)
+    #expect(abs(overlay.panel.frame.height - expected) <= 1)
+    #expect(abs(overlay.panel.frame.maxY - top) <= 1)
+    #expect(overlay.lyricHostingView === host)
+}
+
+private struct SizingStreamRepository: LyricsRepository {
+    let stream: AsyncThrowingStream<LyricCandidate, Error>
+    func lyrics(for track: Track, forceRefresh: Bool) -> AsyncThrowingStream<LyricCandidate, Error> { stream }
+    func save(_ document: LyricsDocument, for track: Track) async throws {}
+}
+
+@MainActor @Test func automaticSearchReplacesWaitingHeightAndUpdatesIncrementalTailWhilePaused() async throws {
+    _ = NSApplication.shared
+    let suite = "LyricsXTests-" + UUID().uuidString
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let prefs = Preferences(defaults: defaults)
+    prefs.overlayWidth = 620; prefs.overlayAdaptiveSize = true
+    prefs.overlaySecondaryMode = .translation; prefs.reduceMotion = false
+    prefs.hideWhenPaused = false; prefs.hideOverlayOnHover = false
+    let pair = AsyncThrowingStream<LyricCandidate, Error>.makeStream()
+    let model = AppModel(repository: SizingStreamRepository(stream: pair.stream), preferences: prefs)
+    model.session.accept(.init(track: .init(playerID: "test", playerName: "Test", title: "Automatic replacement"), position: 1, isPlaying: false))
+    let overlay = OverlayController(model: model, frameAutosaveName: nil)
+    defer { pair.continuation.finish(); overlay.stop(); model.stop() }
+    let top = overlay.panel.frame.maxY
+    let host = overlay.lyricHostingView
+    #expect(abs(overlay.panel.frame.height - OverlayPresentationMode.waitingHeight) <= 1)
+    let short = LyricsDocument(lines: [.init(id: 0, time: 0, text: "Short"), .init(id: 1, time: 60, text: "Next")])
+    pair.continuation.yield(.init(document: short, score: 80))
+    let shortHeight = OverlayTextMeasure.height(document: short, index: 0, preferences: prefs, maximumWidth: 620)
+    var deadline = ContinuousClock.now.advanced(by: .seconds(2))
+    while abs(overlay.panel.frame.height - shortHeight) > 1, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+    #expect(abs(overlay.panel.frame.height - shortHeight) <= 1)
+    var upgraded = short
+    upgraded.lines[1].time = 1.1
+    upgraded.lines[1].text = "Short text with a long incremental continuation that needs a second row to stay readable"
+    upgraded.lines[0].translation = "新增翻译\n第二行翻译"
+    var uncached = upgraded; uncached.id = UUID()
+    let tall = OverlayTextMeasure.height(document: uncached, index: 0, preferences: prefs, maximumWidth: 620)
+    #expect(tall > shortHeight)
+    pair.continuation.yield(.init(document: upgraded, score: 90))
+    deadline = ContinuousClock.now.advanced(by: .seconds(2))
+    while abs(overlay.panel.frame.height - tall) > 1, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+    #expect(abs(overlay.panel.frame.height - tall) <= 1)
+    #expect(model.session.currentLineIndex == 0 && model.session.position == 1)
+    #expect(abs(overlay.panel.frame.maxY - top) <= 1)
+    #expect(overlay.lyricHostingView === host)
+    model.session.use(short, persist: false)
+    deadline = ContinuousClock.now.advanced(by: .seconds(2))
+    while abs(overlay.panel.frame.height - shortHeight) > 1, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+    #expect(abs(overlay.panel.frame.height - shortHeight) <= 1)
+}

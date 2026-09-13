@@ -64,6 +64,16 @@ public struct SystemMediaPayload: Decodable, Sendable {
         )
     }
 
+    func matchingMusicArtwork(title: String, artist: String, album: String) -> Data? {
+        // Never borrow another player's image or a stale track's artwork.
+        guard (parentApplicationBundleIdentifier ?? bundleIdentifier) == "com.apple.Music",
+              self.title == title, self.artist == artist,
+              album.isEmpty || self.album == album,
+              let encoded = artworkDataBase64,
+              let data = Self.decodeArtwork(encoded), !data.isEmpty, data.count < 8_000_000 else { return nil }
+        return data
+    }
+
     private static func decodeArtwork(_ value: String) -> Data? {
         let payload: String
         if let separator = value.firstIndex(of: ","), value[..<separator].contains("base64") {
@@ -96,6 +106,7 @@ public final class PlayerBridge {
     private var refreshPending = false
     private var continuity = PlaybackContinuity()
     private var artworkAttempts = 0
+    private var nextArtworkAttempt: Double = 0
     private var snapshotReader: (@MainActor () async throws -> PlaybackSnapshot)?
     private var commandExecutor: (@MainActor (PlayerCommand) async throws -> Void)?
     private var now: @MainActor () -> Double = { ProcessInfo.processInfo.systemUptime }
@@ -379,11 +390,13 @@ public final class PlayerBridge {
         }
         let persistentID = (item.id?.isEmpty == false ? item.id! : [title, item.artist ?? "", item.album ?? ""].joined(separator: "\u{1f}"))
         if artworkCacheID != persistentID {
-            artworkCacheID = persistentID; artworkCacheData = nil; artworkAttempts = 0
+            artworkCacheID = persistentID; artworkCacheData = nil; artworkAttempts = 0; nextArtworkAttempt = 0
         }
-        if !spotify, artworkCacheData == nil, artworkAttempts < 3 {
+        if !spotify, artworkCacheData == nil, ProcessInfo.processInfo.systemUptime >= nextArtworkAttempt {
             artworkAttempts += 1
-            let data = await readMusicArtwork(expectedID: item.id ?? "")
+            var data = await readMusicArtwork(expectedID: item.id ?? "")
+            if data == nil { data = await readSystemMusicArtwork(title: title, artist: item.artist ?? "", album: item.album ?? "") }
+            nextArtworkAttempt = ProcessInfo.processInfo.systemUptime + (artworkAttempts < 3 ? 3 : 30)
             try Task.checkCancellation()
             artworkCacheData = data
         }
@@ -407,6 +420,17 @@ public final class PlayerBridge {
         guard let value, !value.isEmpty else { return nil }
         if value.hasPrefix("file://") { return URL(string: value) }
         return URL(fileURLWithPath: value)
+    }
+    private func readSystemMusicArtwork(title: String, artist: String, album: String) async -> Data? {
+        guard let result = try? await runMedia(["update_player_state"]), result.status == 0 else { return nil }
+        struct Envelope: Decodable { var notificationName: String; var payload: SystemMediaPayload }
+        for line in String(decoding: result.data, as: UTF8.self).split(separator: "\n").reversed() {
+            guard let event = try? JSONDecoder().decode(Envelope.self, from: Data(line.utf8)),
+                  event.notificationName.contains("NowPlayingInfoDidChange"),
+                  let data = event.payload.matchingMusicArtwork(title: title, artist: artist, album: album) else { continue }
+            return data
+        }
+        return nil
     }
     private func readMusicArtwork(expectedID: String) async -> Data? {
         let outputURL = FileManager.default.temporaryDirectory.appendingPathComponent("lyricsx-artwork-\(UUID().uuidString).bin")
