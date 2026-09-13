@@ -197,11 +197,6 @@ struct PreferencesView: View {
         @Bindable var p = model.preferences
         return Group {
             SettingsCard(title: "动态效果") {
-                SettingRow(title: "悬浮窗帧率", detail: "60 帧减少歌词绘制次数；跟随屏幕使用所在屏幕的最高刷新率。所有动效都会保留。", impact: "高刷新率屏幕下，60 帧的运动细腻度会有所降低。实际 GPU 占用还受玻璃背景与其他窗口影响。") {
-                    Picker("悬浮窗帧率", selection: $p.overlayFrameRate) {
-                        ForEach(OverlayFrameRate.allCases) { Text($0.title).tag($0) }
-                    }.labelsHidden().frame(width: 140)
-                }
                 SettingToggle(title: "减少动态效果", detail: "关闭位移、回弹、模糊和辉光，保留歌词同步提亮。", impact: "也会遵循 macOS 的减少动态效果设置。", value: $p.reduceMotion)
                 SettingToggle(title: "逐字轻微放大", detail: "演唱中的词柔和放大并轻微上浮，未唱部分保持接近原字号。", impact: "需要歌词自带逐字时间；开启动效会增加少量绘制开销。", value: $p.lyricWordLift)
                     .disabled(p.reduceMotion || systemReduceMotion)
@@ -210,10 +205,10 @@ struct PreferencesView: View {
                 }
             }
             SettingsCard(title: "长音辉光") {
-                LyricGlowPicker(enabled: $p.lyricGlow)
+                LyricGlowPicker(enabled: $p.lyricGlow, reduced: p.reduceMotion || systemReduceMotion)
                     .disabled(p.reduceMotion || systemReduceMotion)
             }
-            hdrSettings
+            if p.lyricGlow && !p.reduceMotion && !systemReduceMotion { hdrSettings }
         }
     }
 
@@ -221,16 +216,12 @@ struct PreferencesView: View {
         @Bindable var p = model.preferences
         let unavailable = !p.lyricGlow || p.reduceMotion || systemReduceMotion
         return SettingsCard(title: "HDR") {
-            ForEach(model.displays.displays) { display in
-                SettingRow(title: "EDR 支持", detail: display.name + (display.builtIn ? "（内置屏幕）。" : "（外接屏幕）。") + display.explanation) {
-                    Text(display.status).font(.callout.weight(.medium))
-                        .foregroundStyle(display.supported ? Color.green : Color.secondary)
-                }
-            }
             SettingToggle(title: "HDR 辉光增强", detail: "默认开启，按所在屏幕能力增强长音辉光。普通屏幕自动使用普通亮度。需先开启长音辉光。", impact: "高亮效果可能更刺眼并增加能耗；实际亮度由屏幕和系统决定。", value: $p.lyricHDR)
                 .disabled(unavailable)
+            if p.lyricHDR {
             SettingSlider(title: "HDR 亮度", detail: "设置辉光的目标强度，自动限制在所在屏幕的能力内。不会改变屏幕亮度设置。", value: $p.lyricHDRBrightness, range: 1...4, step: 0.1, suffix: "×", decimals: 1)
-                .disabled(unavailable || !p.lyricHDR)
+                .disabled(unavailable)
+            }
         }
     }
 
@@ -264,6 +255,13 @@ struct PreferencesView: View {
     private var developerSettings: some View {
         @Bindable var p = model.preferences
         return Group {
+            SettingsCard(title: "渲染与功耗") {
+                SettingRow(title: "悬浮窗帧率", detail: "智能节能在系统低电量模式或明显发热时限制为 60 帧，恢复后跟随屏幕。也可固定 60 帧。所有动效都会保留。", impact: "高刷新率屏幕下，60 帧的运动细腻度会有所降低。实际 GPU 占用还受玻璃背景与其他窗口影响。") {
+                    Picker("悬浮窗帧率", selection: $p.overlayFrameRate) {
+                        ForEach(OverlayFrameRate.allCases) { Text($0.title).tag($0) }
+                    }.labelsHidden().frame(width: 140)
+                }
+            }
             SettingsCard(title: "歌词文件夹") {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("当前路径").font(.body.weight(.medium))

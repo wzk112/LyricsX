@@ -3,14 +3,32 @@ import LyricsXCore
 
 struct AmbientBackground: View {
     var artwork: NSImage?
-    var moving: Bool
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var backdrop: CGImage?
+    @State private var renderedArtwork: ObjectIdentifier?
     var body: some View {
         GeometryReader { geometry in
             ZStack {
                 Color(red: 0.045, green: 0.035, blue: 0.075)
                 if let artwork {
-                    Image(nsImage: artwork).resizable().scaledToFill().frame(width: geometry.size.width, height: geometry.size.height).blur(radius: 85).opacity(0.32)
+                    let key = AmbientArtworkKey(artwork: artwork, size: geometry.size)
+                    ZStack {
+                        Color.clear
+                        if let backdrop {
+                            Image(decorative: backdrop, scale: 1).resizable().opacity(0.32)
+                        }
+                    }.task(id: key) {
+                        // Coalesce resize events and discard obsolete work before
+                        // starting the CPU blur or committing its result.
+                        if renderedArtwork == ObjectIdentifier(artwork) {
+                            do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+                        }
+                        guard !Task.isCancelled,
+                              let source = artwork.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
+                        let result = await AmbientArtworkRenderer.shared.render(source, key: key)
+                        guard !Task.isCancelled else { return }
+                        backdrop = result
+                        renderedArtwork = ObjectIdentifier(artwork)
+                    }
                 } else {
                     LinearGradient(colors: [Color(white: 0.12), Color(white: 0.045)], startPoint: .topLeading, endPoint: .bottomTrailing)
                 }

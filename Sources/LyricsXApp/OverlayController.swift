@@ -54,7 +54,10 @@ final class OverlayController: NSObject, NSWindowDelegate {
     private var sizingIndex: Int?
     private var sizingConversion = ""
     private var desiredSize = NSSize.zero
-    private var hoverTimer: Timer?
+    private var localPointerMonitor: Any?
+    private var globalPointerMonitor: Any?
+    private var pointerRefresh: DispatchWorkItem?
+    private var pointerTrackingArea: NSTrackingArea?
     private var screenObserver: NSObjectProtocol?
     private var accessibilityObserver: NSObjectProtocol?
 
@@ -169,7 +172,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
         cancelResize()
         stopped = true
         resizeGeneration += 1
-        hoverTimer?.invalidate(); hoverTimer = nil
+        stopPointerTracking()
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
         if let accessibilityObserver { NSWorkspace.shared.notificationCenter.removeObserver(accessibilityObserver) }
         controlPanel.orderOut(nil); panel.orderOut(nil)
@@ -200,18 +203,50 @@ final class OverlayController: NSObject, NSWindowDelegate {
                              reduceTransparency: NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency,
                              reduceMotion: prefs.reduceMotion || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
         updateSizing()
-        let needsHoverTracking = visible
-        if needsHoverTracking && hoverTimer == nil {
-            let timer = Timer(timeInterval: 0.08, repeats: true) { [weak self] _ in
-                MainActor.assumeIsolated { self?.refreshAppearance() }
-            }
-            timer.tolerance = 0.02
-            RunLoop.main.add(timer, forMode: .common)
-            hoverTimer = timer
-        } else if !needsHoverTracking {
-            hoverTimer?.invalidate(); hoverTimer = nil
-        }
+        if visible { startPointerTracking() } else { stopPointerTracking() }
         refreshAppearance()
+    }
+
+    private func startPointerTracking() {
+        guard localPointerMonitor == nil else { return }
+        let mask: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDragged, .rightMouseDragged]
+        localPointerMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
+            self?.schedulePointerRefresh()
+            return event
+        }
+        globalPointerMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] _ in
+            self?.schedulePointerRefresh()
+        }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect], owner: self)
+        root.addTrackingArea(area)
+        pointerTrackingArea = area
+        panel.acceptsMouseMovedEvents = true
+        controlPanel.acceptsMouseMovedEvents = true
+    }
+
+    @objc func mouseEntered(_ event: NSEvent) { schedulePointerRefresh() }
+    @objc func mouseExited(_ event: NSEvent) { schedulePointerRefresh() }
+    @objc func mouseMoved(_ event: NSEvent) { schedulePointerRefresh() }
+
+    private func schedulePointerRefresh() {
+        guard lastVisible, !stopped, pointerRefresh == nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.pointerRefresh = nil
+            guard self.lastVisible, !self.stopped else { return }
+            self.refreshAppearance()
+        }
+        pointerRefresh = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.04, execute: work)
+    }
+
+    private func stopPointerTracking() {
+        if let localPointerMonitor { NSEvent.removeMonitor(localPointerMonitor) }
+        if let globalPointerMonitor { NSEvent.removeMonitor(globalPointerMonitor) }
+        localPointerMonitor = nil; globalPointerMonitor = nil
+        if let pointerTrackingArea { root.removeTrackingArea(pointerTrackingArea) }
+        pointerTrackingArea = nil
+        pointerRefresh?.cancel(); pointerRefresh = nil
     }
 
     func refreshAppearance(at point: NSPoint? = nil) {
@@ -373,6 +408,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     func windowDidResize(_ notification: Notification) {
+        schedulePointerRefresh()
         positionContent(); positionControlPanel()
     }
 
@@ -382,6 +418,7 @@ final class OverlayController: NSObject, NSWindowDelegate {
     }
 
     func windowDidMove(_ notification: Notification) {
+        schedulePointerRefresh()
         // Inline controls are part of this window, so dragging needs no second
         // window update, timer, animation, or end-of-drag position correction.
         if !dragging && !resizing && !restoring { saveFrame() }

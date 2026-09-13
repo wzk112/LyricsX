@@ -3,10 +3,10 @@ import QuartzCore
 import SwiftUI
 
 enum OverlayFrameRate: String, CaseIterable, Identifiable {
-    case display, sixty
+    case display, sixty, adaptive
     var id: String { rawValue }
-    var limit: Int { self == .sixty ? 60 : 0 }
-    var title: String { self == .sixty ? "60 帧" : "跟随屏幕" }
+    var limit: Int { self == .adaptive ? -1 : self == .sixty ? 60 : 0 }
+    var title: String { self == .adaptive ? "智能节能" : self == .sixty ? "60 帧" : "跟随屏幕" }
 }
 
 private struct LyricFrameRateLimitKey: EnvironmentKey { static let defaultValue = 0 }
@@ -63,6 +63,9 @@ struct LyricFrameSource: NSViewRepresentable {
             name: NSWindow.didChangeScreenNotification, object: window)
         NotificationCenter.default.addObserver(self, selector: #selector(updateFrameRate),
             name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        for name in [Notification.Name.NSProcessInfoPowerStateDidChange, ProcessInfo.thermalStateDidChangeNotification] {
+            NotificationCenter.default.addObserver(self, selector: #selector(updateFrameRate), name: name, object: nil)
+        }
         updateActivity(nil)
         // Attachment often precedes the window's first orderFront. Read again
         // after that operation even if AppKit coalesces its occlusion event.
@@ -88,7 +91,9 @@ struct LyricFrameSource: NSViewRepresentable {
     @objc private func updateFrameRate() {
         guard let link else { return }
         let screenMaximum = max(1, window?.screen?.maximumFramesPerSecond ?? NSScreen.main?.maximumFramesPerSecond ?? 60)
-        let maximum = frameRateLimit > 0 ? min(screenMaximum, frameRateLimit) : screenMaximum
+        let constrained = ProcessInfo.processInfo.isLowPowerModeEnabled || ProcessInfo.processInfo.thermalState == .serious || ProcessInfo.processInfo.thermalState == .critical
+        let limit = frameRateLimit == -1 ? (constrained ? 60 : 0) : frameRateLimit
+        let maximum = limit > 0 ? min(screenMaximum, limit) : screenMaximum
         guard requestedFrameRate != maximum else { return }
         requestedFrameRate = maximum
         // A window-scoped limit never exceeds its display. AppKit moves this
