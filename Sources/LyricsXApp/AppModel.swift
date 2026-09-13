@@ -86,15 +86,33 @@ final class AppModel {
         wakeObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.bridge.stop(); self?.session.freeze() }
         })
+        startLyricClock()
+    }
+    var isLyricClockRunning: Bool { ticker?.running == true }
+    func startLyricClock() {
+        guard ticker == nil else { return }
         ticker = PlaybackTicker { [weak self] in
             guard let self else { return nil }
+            guard self.session.isPlaying else { return nil }
             self.session.tick()
             self.updateMainLyricSelection()
             let visible = self.mainWindowVisible || self.overlay?.needsPreciseLyricTicks == true
             return LyricTickCadence.milliseconds(playing: self.session.isPlaying, visible: visible,
                 document: self.session.document, position: self.session.position)
         }
-        ticker?.start()
+        observeTickerActivity()
+    }
+    private func observeTickerActivity() {
+        guard !presentationStopped else { return }
+        var playing = false
+        withObservationTracking {
+            playing = session.isPlaying
+            _ = session.document?.id
+        } onChange: { [weak self] in
+            Task { @MainActor in self?.observeTickerActivity() }
+        }
+        updateMainLyricSelection()
+        if playing { ticker?.start() } else { ticker?.stop() }
     }
     func stop() {
         ticker?.stop(); ticker = nil; artworkTask?.cancel(); presentationStopped = true

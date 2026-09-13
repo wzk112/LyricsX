@@ -126,7 +126,7 @@ struct PreferencesView: View {
     private var playerSettings: some View {
         @Bindable var p = model.preferences
         return SettingsCard(title: "连接播放器") {
-            SettingRow(title: "读取来源", detail: "自动模式跟随系统正在播放；指定播放器时仅跟随所选应用。", impact: "首次连接可能需要在 macOS 中允许自动化访问。") {
+            SettingRow(title: "读取来源", detail: "自动识别 Apple Music、Spotify、网易云、QQ 音乐及系统标记为音乐类的应用，排除浏览器。其他播放器需向系统提供播放状态；指定模式只跟随所选应用。", impact: "首次连接可能需要在 macOS 中允许自动化访问。") {
                 Picker("读取来源", selection: $p.playerMode) {
                     ForEach(PlayerMode.allCases) { Text($0.title).tag($0) }
                 }.labelsHidden().frame(width: 160)

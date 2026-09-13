@@ -7,7 +7,7 @@ public enum PlayerMode: String, CaseIterable, Sendable, Identifiable {
     case automatic, appleMusic, spotify
     public var id: String { rawValue }
     public var title: String {
-        switch self { case .automatic: "自动 · 系统正在播放"; case .appleMusic: "Apple Music"; case .spotify: "Spotify" }
+        switch self { case .automatic: "自动 · 音乐播放器"; case .appleMusic: "Apple Music"; case .spotify: "Spotify" }
     }
     var bundleID: String? { switch self { case .automatic: nil; case .appleMusic: "com.apple.Music"; case .spotify: "com.spotify.client" } }
 }
@@ -87,7 +87,9 @@ public final class PlayerBridge {
     private var commandTask: Task<Void, Never>?
     private var commandQueue: [PlayerCommand] = []
     private var observers: [NSObjectProtocol] = []
+    private var workspaceObservers: [NSObjectProtocol] = []
     private var latestScriptID = ""
+    private var latestScriptTarget = ""
     private var artworkCacheID = ""
     private var artworkCacheData: Data?
     private var scriptTarget: String?
@@ -110,18 +112,38 @@ public final class PlayerBridge {
                 Task { @MainActor in self?.refresh() }
             })
         }
+        for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
+            workspaceObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+                Task { @MainActor in
+                    guard let app else { return }
+                    MusicSourcePolicy.invalidate(app)
+                    guard MusicSourcePolicy.accepts(app) else { return }
+                    self?.refresh()
+                }
+            })
+        }
         loop = Task { [weak self] in
             while !Task.isCancelled {
                 self?.refresh()
-                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                do { try await Task.sleep(for: .seconds(self?.pollInterval ?? 1)) } catch { return }
             }
         }
+    }
+    var pollInterval: Double {
+        guard let latest = continuity.latest else { return 1 }
+        if latest.track == nil { return 5 }
+        // Only players with a direct pause/resume notification get the longer
+        // paused interval. Other music apps retain one-second discovery.
+        if !latest.isPlaying, ["com.apple.Music", "com.spotify.client"].contains(latest.track?.playerID ?? "") { return 5 }
+        return 1
     }
     public func stop() {
         revision &+= 1; loop?.cancel(); loop = nil; pollTask?.cancel(); pollTask = nil
         refreshPending = false
         commandTask?.cancel(); commandTask = nil; commandQueue.removeAll()
         for token in observers { DistributedNotificationCenter.default().removeObserver(token) }; observers = []
+        for token in workspaceObservers { NSWorkspace.shared.notificationCenter.removeObserver(token) }; workspaceObservers = []
     }
     public func restart() { stop(); latestScriptID = ""; artworkCacheID = ""; artworkCacheData = nil; start() }
     public func refresh() {
@@ -222,6 +244,11 @@ public final class PlayerBridge {
             let result = try await ProcessRunner.run("/usr/bin/osascript", arguments: ["-l", "JavaScript", "-e", "const app = Application('\(target)'); if (app.running()) { \(operation); }"])
             guard result.status == 0 else { throw BridgeError.automation }
         } else {
+            // Do not send a stale music control to a browser that has taken
+            // over system playback since the last sample.
+            guard let current = try await readSnapshot().track else { throw BridgeError.excludedSource }
+            if scriptTarget != nil { try await execute(command); return }
+            guard current.playerID == continuity.latest?.track?.playerID else { throw BridgeError.excludedSource }
             let args: [String]
             switch command {
             case .toggle: args = ["toggle_play_pause"]
@@ -236,6 +263,18 @@ public final class PlayerBridge {
     private func readSnapshot() async throws -> PlaybackSnapshot {
         if let target = mode.bundleID { scriptTarget = target; return try await readScript(target) }
         let previousScriptTarget = scriptTarget
+        let musicApps = NSWorkspace.shared.runningApplications.filter { MusicSourcePolicy.accepts($0) }
+        guard !musicApps.isEmpty else {
+            scriptTarget = nil
+            return PlaybackSnapshot(track: nil, position: 0, isPlaying: false)
+        }
+        // If only one music app exists, querying the system adapter first
+        // cannot discover a different eligible player. Avoid that subprocess.
+        if musicApps.count == 1, let target = musicApps.first?.bundleIdentifier,
+           ["com.apple.Music", "com.spotify.client"].contains(target) {
+            scriptTarget = target
+            return try await readScript(target)
+        }
         do {
             let result = try await runMedia(["update_player_state"])
             guard result.status == 0 else { throw BridgeError.unavailable }
@@ -243,6 +282,9 @@ public final class PlayerBridge {
             for line in String(decoding: result.data, as: UTF8.self).split(separator: "\n").reversed() {
                 guard let item = try? JSONDecoder().decode(Envelope.self, from: Data(line.utf8)), item.notificationName.contains("NowPlayingInfoDidChange") else { continue }
                 let running = item.payload.processIdentifier.flatMap { NSRunningApplication(processIdentifier: $0) }
+                let ownerID = item.payload.parentApplicationBundleIdentifier ?? item.payload.bundleIdentifier ?? running?.bundleIdentifier
+                let owner = musicApps.first { $0.bundleIdentifier == ownerID }
+                guard MusicSourcePolicy.accepts(bundleID: ownerID) || owner != nil else { throw BridgeError.excludedSource }
                 let isIOS = MediaController.isiOSAppOnMac(runningApp: running)
                 let snapshot = item.payload.snapshot(now: ProcessInfo.processInfo.systemUptime, isIOSApp: isIOS)
                 guard let track = snapshot.track else { throw BridgeError.unavailable }
@@ -279,6 +321,10 @@ public final class PlayerBridge {
                 scriptTarget = first.id
                 return first.value
             }
+            if runningIDs.isEmpty, (error as? BridgeError) == .excludedSource {
+                scriptTarget = nil
+                return PlaybackSnapshot(track: nil, position: 0, isPlaying: false)
+            }
             if runningIDs.isEmpty, continuity.latest?.track.map({ NSRunningApplication.runningApplications(withBundleIdentifier: $0.playerID).isEmpty }) != false {
                 return PlaybackSnapshot(track: nil, position: 0, isPlaying: false)
             }
@@ -309,17 +355,18 @@ public final class PlayerBridge {
           const t = safe(() => app.currentTrack(), null);
           const id = String(safe(() => t.\(spotify ? "id" : "persistentID")(), ''));
           const state = safe(() => app.playerState(), null);
+          const same = id.length > 0 && id === argv[0];
           const result = {title:safe(() => t.name(), ''),artist:safe(() => t.artist(), ''),album:safe(() => t.album(), ''),id:id,
             duration:safe(() => t.duration(),0)/\(spotify ? "1000" : "1"),position:safe(() => app.playerPosition(),null),
             playing:state === 'playing' ? true : state === 'paused' || state === 'stopped' ? false : null,
-            artwork:\(spotify ? "safe(() => t.artworkUrl(), '')" : "''"),lyrics:\(spotify ? "''" : "safe(() => t.lyrics(), '')"),location:\(spotify ? "''" : "safe(() => t.location().toString(), '')")};
+            artwork:\(spotify ? "same ? null : safe(() => t.artworkUrl(), '')" : "''"),lyrics:\(spotify ? "''" : "same ? null : safe(() => t.lyrics(), '')"),location:\(spotify ? "''" : "same ? null : safe(() => t.location().toString(), '')")};
           const endID = String(safe(() => app.currentTrack().\(spotify ? "id" : "persistentID")(), ''));
           result.coherent = id === endID;
           return JSON.stringify(result);
         }
         """
         let started = ProcessInfo.processInfo.systemUptime
-        let output = try await ProcessRunner.run("/usr/bin/osascript", arguments: ["-l", "JavaScript", "-e", source, latestScriptID])
+        let output = try await ProcessRunner.run("/usr/bin/osascript", arguments: ["-l", "JavaScript", "-e", source, latestScriptTarget == target ? latestScriptID : ""])
         guard output.status == 0 else {
             throw output.error.contains("-1743") ? BridgeError.automation : BridgeError.unavailable
         }
@@ -342,6 +389,7 @@ public final class PlayerBridge {
         }
         try Task.checkCancellation()
         latestScriptID = persistentID
+        latestScriptTarget = target
         let track = Track(playerID: target, playerName: spotify ? "Spotify" : "Apple Music", persistentID: item.id ?? "", title: title,
                           artist: item.artist ?? "", album: item.album ?? "", duration: item.duration ?? 0,
                           artworkData: spotify ? nil : artworkCacheData,
@@ -393,9 +441,10 @@ public final class PlayerBridge {
         return data
     }
     enum BridgeError: LocalizedError, Equatable {
-        case unavailable, automation, bundle, wrongTrack, lyricsWrite
+        case unavailable, automation, bundle, wrongTrack, lyricsWrite, excludedSource
         var errorDescription: String? {
             switch self {
+            case .excludedSource: "当前来源不是音乐播放器。"
             case .unavailable: "暂时无法读取系统播放状态。可在设置中切换到 Apple Music 或 Spotify。"
             case .automation: "请在系统设置 → 隐私与安全性 → 自动化中允许 LyricsX 控制播放器。"
             case .bundle: "播放器组件未就绪，请使用打包后的 LyricsX.app。"
